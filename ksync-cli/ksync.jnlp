@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JNLP File for SwingSet2 Demo Application -->
+<jnlp
+    spec="6.0+"
+    codebase="http://my_company.com/jaws/apps"
+    href="swingset2.jnlp">
+    <information>
+        <title>SwingSet2 Demo Application</title>
+        <vendor>Sun Microsystems, Inc.</vendor>
+        <homepage href="docs/help.html"/>
+        <description>SwingSet2 Demo Application</description>
+        <description kind="short">A demo of the capabilities 
+            of the Swing Graphical User Interface.</description>
+        <offline-allowed/> 
+        <association mime-type="application-x/swingset2-file"  extensions="swingset2"/> 
+        <shortcut online="false" install="false">
+            <desktop/>
+            <menu submenu="My Corporation Apps"/>
+        </shortcut>
+    </information>
+    <information os="linux">   
+        <title> SwingSet2 Demo on Linux </title>
+        <homepage href="docs/linuxhelp.html">
+    </information>
+    <security>
+        <all-permissions/>
+    </security>
+    <resources>
+        <j2se version="1.6+" java-vm-args=""/>            
+        <jar href="http://milton.io/maven/hashsplit4j/hashsplit4j-lib/2.2.5/hashsplit4j-lib-2.2.5.jar"/>
+        <jar href="http://milton.io/maven/io/milton/cardme/1.0.0/cardme-1.0.0.jar"/>
+        <jar href="http://milton.io/maven/io/milton/milton-api/2.6.3.3/milton-api-2.6.3.3.jar"/>
+        <jar href="http://milton.io/maven/io/milton/milton-client/2.6.3.3/milton-client-2.6.3.3.jar"/>
+        
+        <jar href="http://central.maven.org/maven2/aopalliance/aopalliance/1.0/aopalliance-1.0.jar"/>
+        <jar href="http://central.maven.org/maven2/backport-util-concurrent/backport-util-concurrent/3.1/backport-util-concurrent-3.1.jar"/>
+        <jar href="http://central.maven.org/maven2/com/googlecode/concurrentlinkedhashmap/concurrentlinkedhashmap-lru/1.3.2/concurrentlinkedhashmap-lru-1.3.2.jar"/>
+        <jar href="http://central.maven.org/maven2/com/h2database/h2/1.2.144/h2-1.2.144.jar"/>
+        <jar href="http://central.maven.org/maven2/com/sleepycat/je/5.0.73/je-5.0.73.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-beanutils/commons-beanutils/1.8.0/commons-beanutils-1.8.0.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-codec/commons-codec/1.8/commons-codec-1.8.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-collections/commons-collections/3.2.1/commons-collections-3.2.1.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-dbcp/commons-dbcp/1.4/commons-dbcp-1.4.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-io/commons-io/2.4/commons-io-2.4.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-lang/commons-lang/2.6/commons-lang-2.6.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-logging/commons-logging/1.1.1/commons-logging-1.1.1.jar"/>
+        <jar href="http://central.maven.org/maven2/commons-pool/commons-pool/1.5.4/commons-pool-1.5.4.jar"/>
+        <jar href="http://central.maven.org/maven2/concurrent/concurrent/1.0/concurrent-1.0.jar"/>
+        <jar href="http://central.maven.org/maven2/javax/servlet/javax.servlet-api/3.0.1/javax.servlet-api-3.0.1.jar"/>
+        <jar href="http://central.maven.org/maven2/log4j/log4j/1.2.17/log4j-1.2.17.jar"/>
+        <jar href="http://central.maven.org/maven2/net/sf/ezmorph/ezmorph/1.0.6/ezmorph-1.0.6.jar"/>
+        <jar href="http://central.maven.org/maven2/net/sf/json-lib/json-lib/2.4/json-lib-2.4-jdk15.jar"/>
+        <jar href="http://central.maven.org/maven2/org/apache/httpcomponents/httpclient/4.1.3/httpclient-4.1.3.jar"/>
+        <jar href="http://central.maven.org/maven2/org/apache/httpcomponents/httpcore/4.1.4/httpcore-4.1.4.jar"/>
+        <jar href="http://central.maven.org/maven2/org/apache/jcs/jcs/1.3/jcs-1.3.jar"/>
+        <jar href="http://central.maven.org/maven2/org/hamcrest/hamcrest-core/1.1/hamcrest-core-1.1.jar"/>
+        <jar href="http://central.maven.org/maven2/org/jdom/jdom/1.1/jdom-1.1.jar"/>
+        <jar href="http://central.maven.org/maven2/org/slf4j/slf4j-api/1.7.5/slf4j-api-1.7.5.jar"/>
+        <jar href="http://central.maven.org/maven2/org/slf4j/slf4j-log4j12/1.7.7/slf4j-log4j12-1.7.7.jar"/>
+        <jar href="http://central.maven.org/maven2/xml-apis/xml-apis/1.0.b2/xml-apis-1.0.b2.jar"/>
+    </resources>
+    <application-desc main-class="SwingSet2"/>
+</jnlp> 
+
+
