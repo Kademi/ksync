@@ -1,5 +1,6 @@
 package co.kademi.sync;
 
+import co.kademi.deploy.AppDeployer;
 import io.milton.common.Path;
 import io.milton.event.EventManager;
 import io.milton.event.EventManagerImpl;
@@ -59,7 +60,7 @@ public class KSync3 {
 
     private static final Logger log = LoggerFactory.getLogger(KSync3.class);
 
-    public static void main(String[] arg) {
+    public static void main(String[] arg) throws IOException {
 
         Options options = new Options();
         options.addOption("t", false, "display current time");
@@ -106,6 +107,8 @@ public class KSync3 {
                 }
                 System.exit(0); // threads arent shutting down
                 break;
+            case "deploy":                
+                AppDeployer.main(arg);
         }
     }
 
