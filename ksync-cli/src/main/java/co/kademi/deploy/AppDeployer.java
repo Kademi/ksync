@@ -153,6 +153,10 @@ public class AppDeployer {
 
     private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp) throws IOException {
         log.info("upsync {} {} {}", dir, isTheme, isApp);
+        if( dir.listFiles() == null ) {
+            log.warn("No child dirs in " + dir.getAbsolutePath());
+            return ;
+        }
         for (File appDir : dir.listFiles()) {
             if ( appDir.isDirectory() ) {
                 String appName = appDir.getName();
