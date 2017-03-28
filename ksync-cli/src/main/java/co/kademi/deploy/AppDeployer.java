@@ -117,7 +117,7 @@ public class AppDeployer {
         String password;
         String appIds;
 
-        if ( args.length > 0 ) {
+        if ( args.length >= 4 ) {
             url = args[0];
             user = args[1];
             password = args[2];
