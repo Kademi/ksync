@@ -44,6 +44,22 @@
                     <groupId>concurrent</groupId>
                     <artifactId>concurrent</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>io.milton</groupId>
+                    <artifactId>milton-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.googlecode.concurrentlinkedhashmap</groupId>
+                    <artifactId>concurrentlinkedhashmap-lru</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.httpcomponents</groupId>
+                    <artifactId>httpclient</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-codec</groupId>
+                    <artifactId>commons-codec</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -83,6 +99,27 @@
             <artifactId>commons-lang3</artifactId>
             <version>3.4</version>
             <type>jar</type>
+        </dependency>
+        <dependency>
+            <groupId>io.milton</groupId>
+            <artifactId>milton-api</artifactId>
+            <version>2.7.1.5</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>commons-codec</groupId>
+                    <artifactId>commons-codec</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.googlecode.concurrentlinkedhashmap</groupId>
+            <artifactId>concurrentlinkedhashmap-lru</artifactId>
+            <version>1.4.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <version>4.5.2</version>
         </dependency>
     </dependencies>
     <build>
