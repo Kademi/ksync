@@ -132,7 +132,10 @@ public class AppDeployer {
             user = readLine(con, scanner, "Please enter your userid (not email)");
             password = readPassword(con, scanner, "Please enter your password");
 
-            appIds = readLine(con, scanner, "Leave blank to load all apps, or enter a comma seperated list of ids or absolute paths, eg /libs");
+            appIds = readLine(con, scanner, "* to load all apps, or enter a comma seperated list of ids or absolute paths, eg /libs");
+            if( appIds.equals("*")) {
+                appIds = "";
+            }
 
             System.out.println("Cheers..");
         }
