@@ -389,10 +389,11 @@ public class KSync3 {
                     c.up();
                     transferQueueCounter.up();
                     transferExecutor.submit(() -> {
-                        log.info("copy file chunk hash={} file={} chunk size={} to blobstore {}", hash, filePath, arr.length, destBlobStore);
+                        log.info("Copy file chunk hash={} file={} chunk size={} to blobstore {}", hash, filePath, arr.length, destBlobStore);
                         destBlobStore.setBlob(hash, arr);
                         c.down();
                         transferQueueCounter.down();
+                        log.info("Finished Copy file chunk hash={}", hash);
                     });
                     log.info("queue size {}", transferJobs.size());
                 }
@@ -406,6 +407,7 @@ public class KSync3 {
                     destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                     c.down();
                     transferQueueCounter.down();
+                    log.info("Finidh Upload chunk hash={} ", filePath);
                 });
 
             }
@@ -413,9 +415,10 @@ public class KSync3 {
 
         if (!destHashStore.hasFile(fileHash)) {
             // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-            log.info("set file hash1 queue size={}", transferJobs.size());
+            log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
             while (c.count > 0) {
-                Thread.sleep(10);
+                log.info("..waiting for transfers to complete. remaining={}", c.count);
+                Thread.sleep(1000);
             }
             log.info("set file hash2");
             transferQueueCounter.up();

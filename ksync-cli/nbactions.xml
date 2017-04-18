@@ -10,9 +10,9 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-classpath %classpath co.kademi.sync.KSync3 checkout http://zoetis.admin.kademi.com.au/repositories/zoetis-livestock-reseller/version181116/  brad</exec.args>
+                <exec.args>-classpath %classpath co.kademi.deploy.AppDeployer</exec.args>
                 <exec.executable>java</exec.executable>
-                <exec.workingdir>/home/brad/proj/client-zoetis/</exec.workingdir>
+                <exec.workingdir>/home/brad/proj/kademi-dev/src/main/marketplace/</exec.workingdir>
             </properties>
         </action>
         <action>
@@ -25,10 +25,10 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-Xdebug -Xrunjdwp:transport=dt_socket,server=n,address=${jpda.address} -classpath %classpath co.kademi.sync.KSync3 checkout http://zoetis.admin.kademi.com.au/repositories/zoetis-livestock-reseller/version181116/  brad</exec.args>
+                <exec.args>-Xdebug -Xrunjdwp:transport=dt_socket,server=n,address=${jpda.address} -classpath %classpath co.kademi.deploy.AppDeployer</exec.args>
                 <exec.executable>java</exec.executable>
                 <jpda.listen>true</jpda.listen>
-                <exec.workingdir>/home/brad/proj/client-zoetis/</exec.workingdir>
+                <exec.workingdir>/home/brad/proj/kademi-dev/src/main/marketplace/</exec.workingdir>
             </properties>
         </action>
         <action>
@@ -41,9 +41,9 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-classpath %classpath co.kademi.sync.KSync3 checkout http://zoetis.admin.kademi.com.au/repositories/zoetis-livestock-reseller/version181116/  brad</exec.args>
+                <exec.args>-classpath %classpath co.kademi.deploy.AppDeployer</exec.args>
                 <exec.executable>java</exec.executable>
-                <exec.workingdir>/home/brad/proj/client-zoetis/</exec.workingdir>
+                <exec.workingdir>/home/brad/proj/kademi-dev/src/main/marketplace/</exec.workingdir>
             </properties>
         </action>
     </actions>
