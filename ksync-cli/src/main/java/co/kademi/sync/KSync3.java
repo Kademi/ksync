@@ -34,7 +34,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.Options;
