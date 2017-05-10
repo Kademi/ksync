@@ -69,6 +69,11 @@ public class KSync3 {
             list.add(s);
         }
 
+        if( list.isEmpty()) {
+            System.out.println("Please enter a command - checkout, commit, pull, push, sync, deploy");
+            return ;
+        }
+        
         String cmd = arg[0];
         switch (cmd) {
             case "checkout":
@@ -106,8 +111,9 @@ public class KSync3 {
                 }
                 System.exit(0); // threads arent shutting down
                 break;
-            case "deploy":                
+            case "deploy":
                 AppDeployer.main(arg);
+
         }
     }
 
