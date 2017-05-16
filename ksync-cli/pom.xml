@@ -60,6 +60,14 @@
                     <groupId>commons-codec</groupId>
                     <artifactId>commons-codec</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.mnode.ical4j</groupId>
+                    <artifactId>ical4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.mapdb</groupId>
+                    <artifactId>mapdb</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
