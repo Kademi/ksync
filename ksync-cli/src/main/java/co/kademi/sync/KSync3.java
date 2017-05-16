@@ -34,7 +34,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.Options;
@@ -70,6 +69,11 @@ public class KSync3 {
             list.add(s);
         }
 
+        if( list.isEmpty()) {
+            System.out.println("Please enter a command - checkout, commit, pull, push, sync, deploy");
+            return ;
+        }
+        
         String cmd = arg[0];
         switch (cmd) {
             case "checkout":
@@ -107,8 +111,9 @@ public class KSync3 {
                 }
                 System.exit(0); // threads arent shutting down
                 break;
-            case "deploy":                
+            case "deploy":
                 AppDeployer.main(arg);
+
         }
     }
 
