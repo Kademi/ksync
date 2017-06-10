@@ -35,6 +35,7 @@ import java.util.Scanner;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.collections.ComparatorUtils;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Fanout;
@@ -53,7 +54,7 @@ public class AppDeployer {
 
     private static String readLine(Console con, Scanner scanner, String msg) {
         System.out.println(msg + ": ");
-        if ( con != null ) {
+        if (con != null) {
             return con.readLine();
         }
         return scanner.next();
@@ -61,11 +62,68 @@ public class AppDeployer {
 
     private static String readPassword(Console con, Scanner scanner, String msg) {
         System.out.println(msg + ": ");
-        if ( con != null ) {
+        if (con != null) {
             char[] cars = con.readPassword();
             return new String(cars);
         }
         return scanner.next();
+    }
+
+    public static String findVersion(File appDir) {
+        File versionFile = new File(appDir, "app-version.txt");
+        if (versionFile.exists()) {
+            try {
+                String version = FileUtils.readFileToString(versionFile);
+                return version;
+            } catch (IOException ex) {
+                log.error("Couldnt read version file " + versionFile.getAbsolutePath());
+            }
+
+        }
+        return "0001";
+    }
+
+    public static void main(String[] args) throws MalformedURLException, IOException {
+        String userDir = System.getProperty("user.dir");
+        File dir = new File(userDir);
+        if (!dir.exists()) {
+            System.out.println("Dir not found: " + dir.getAbsolutePath());
+            return;
+        }
+        log.info("Current directory: " + dir.getAbsolutePath());
+        String url;
+        String user;
+        String password;
+        String appIds;
+
+        if (args.length >= 4) {
+            url = args[0];
+            user = args[1];
+            password = args[2];
+            appIds = args[3];
+        } else {
+            Console con = System.console();
+            Scanner scanner = null;
+            if (con == null) {
+                scanner = new Scanner(System.in);
+            }
+            url = readLine(con, scanner, "Please enter a host url, eg http://localhost:8080/");
+            user = readLine(con, scanner, "Please enter your userid (not email)");
+            password = readPassword(con, scanner, "Please enter your password");
+
+            appIds = readLine(con, scanner, "* to load all apps, or enter a comma seperated list of ids or absolute paths, eg /libs");
+            if (appIds.equals("*")) {
+                appIds = "";
+            }
+
+            System.out.println("Cheers..");
+        }
+        AppDeployer d = new AppDeployer(dir, url, user, password, appIds);
+
+        d.upsync();
+
+        log.info("Completed");
+        System.exit(0);
     }
 
     private final File rootDir;
@@ -86,7 +144,7 @@ public class AppDeployer {
         client.setTimeout(30000);
         client.setUseDigestForPreemptiveAuth(false);
         String s = sAppIds;
-        if ( StringUtils.isBlank(s) ) {
+        if (StringUtils.isBlank(s)) {
             this.appIds = null;
         } else {
             this.appIds = new ArrayList<>();
@@ -104,49 +162,6 @@ public class AppDeployer {
         localHashStore = new FileSystem2HashStore(new File(localDataDir, "hash"));
     }
 
-    public static void main(String[] args) throws MalformedURLException, IOException {
-        String userDir = System.getProperty("user.dir");
-        File dir = new File(userDir);
-        if ( !dir.exists() ) {
-            System.out.println("Dir not found: " + dir.getAbsolutePath());
-            return;
-        }
-        log.info("Current directory: " + dir.getAbsolutePath());
-        String url;
-        String user;
-        String password;
-        String appIds;
-
-        if ( args.length >= 4 ) {
-            url = args[0];
-            user = args[1];
-            password = args[2];
-            appIds = args[3];
-        } else {
-            Console con = System.console();
-            Scanner scanner = null;
-            if ( con == null ) {
-                scanner = new Scanner(System.in);
-            }
-            url = readLine(con, scanner, "Please enter a host url, eg http://localhost:8080/");
-            user = readLine(con, scanner, "Please enter your userid (not email)");
-            password = readPassword(con, scanner, "Please enter your password");
-
-            appIds = readLine(con, scanner, "* to load all apps, or enter a comma seperated list of ids or absolute paths, eg /libs");
-            if( appIds.equals("*")) {
-                appIds = "";
-            }
-
-            System.out.println("Cheers..");
-        }
-        AppDeployer d = new AppDeployer(dir, url, user, password, appIds);
-
-        d.upsync();
-
-        log.info("Completed");
-        System.exit(0);
-    }
-
     public void upsync() throws IOException {
         upSyncMarketplaceDir(new File(rootDir, "themes"), true, false);
         upSyncMarketplaceDir(new File(rootDir, "apps"), false, false);
@@ -156,21 +171,21 @@ public class AppDeployer {
 
     private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp) throws IOException {
         log.info("upsync {} {} {}", dir, isTheme, isApp);
-        if( dir.listFiles() == null ) {
+        if (dir.listFiles() == null) {
             log.warn("No child dirs in " + dir.getAbsolutePath());
-            return ;
+            return;
         }
         for (File appDir : dir.listFiles()) {
-            if ( appDir.isDirectory() ) {
+            if (appDir.isDirectory()) {
                 String appName = appDir.getName();
 
-                if ( isProcess(appDir) ) {
+                if (isProcess(appDir)) {
 
                     log.info("checkCreateApp {} {}", appName);
                     String appPath = "/manageApps/" + appName;
                     boolean appCreated = false;
-                    if ( !doesExist(appPath) ) {
-                        if ( createApp(appName, isTheme, isApp) ) {
+                    if (!doesExist(appPath)) {
+                        if (createApp(appName, isTheme, isApp)) {
                             appCreated = true;
                             log.info("created app {}", appName);
                         } else {
@@ -183,18 +198,14 @@ public class AppDeployer {
 //                } catch (Exception e) {
 //                    System.out.println("eek");
 //                }
-                    for (File versionDir : appDir.listFiles()) {
-                        if ( versionDir.isDirectory() ) {
-                            String versionName = versionDir.getName();
-                            upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, versionDir);
-                        }
-                    }
+                    String versionName = AppDeployer.findVersion(appDir);
+                    upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
 
-                    if ( appCreated ) {
-                        if ( !addToMarketPlace(appName) ) {
+                    if (appCreated) {
+                        if (!addToMarketPlace(appName)) {
                             throw new RuntimeException("Failed to add app to marketplace " + appPath);
                         }
-                        if ( !publishApp(appName) ) {
+                        if (!publishApp(appName)) {
                             throw new RuntimeException("Failed to publish app to marketplace " + appPath);
                         }
                     }
@@ -242,11 +253,11 @@ public class AppDeployer {
 
     private void push(String localRootHash, String branchPath) throws IOException, InterruptedException {
         String remoteHash = getRemoteHash(branchPath);
-        if ( remoteHash == null ) {
+        if (remoteHash == null) {
             log.info("Aborted");
             return;
         }
-        if ( remoteHash.equals(localRootHash) ) {
+        if (remoteHash.equals(localRootHash)) {
             log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
             return;
         }
@@ -260,16 +271,16 @@ public class AppDeployer {
             String res = client.post(branchPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Completed ok");
                     return;
                 }
             }
             System.out.println("jsonRes " + jsonRes);
             JSONObject data = (JSONObject) jsonRes.get("data");
-            if ( data != null ) {
+            if (data != null) {
                 httpHashStore.setForce(true);
                 httpBlobStore.setForce(true);
                 JSONArray missing = (JSONArray) data.get("missingFileFanouts");
@@ -277,9 +288,9 @@ public class AppDeployer {
                     log.info("Missing file fanout: {}", ff);
                     String missingHash = ff.toString();
                     Fanout f = localHashStore.getFileFanout(missingHash);
-                    if( f == null ) {
+                    if (f == null) {
                         log.error("Could not find locally missing file fanout: " + missingHash);
-                        return ;
+                        return;
                     }
                     httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
                     log.info("Uploaded missing file fanout");
@@ -291,9 +302,9 @@ public class AppDeployer {
                     log.info("Missing chunk fanout: {}", ff);
                     String missingHash = ff.toString();
                     Fanout f = localHashStore.getChunkFanout(missingHash);
-                    if( f == null ) {
+                    if (f == null) {
                         log.error("Could not find locally missing chunk fanout: " + missingHash);
-                        return ;
+                        return;
                     }
                     httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
                     log.info("Uploaded missing chunk fanout");
@@ -305,14 +316,13 @@ public class AppDeployer {
                     log.info("Missing blob: {}", ff);
                     String missingHash = ff.toString();
                     byte[] f = localBlobStore.getBlob(missingHash);
-                    if( f == null ) {
+                    if (f == null) {
                         log.error("Could not find locally missing blob: " + missingHash);
-                        return ;
+                        return;
                     }
                     httpBlobStore.setBlob(missingHash, f);
                     log.info("Uploaded missing blob");
                 }
-
 
             }
             log.info("Push failed: But missing objects have been uploaded so please try again :)", res);
@@ -337,8 +347,8 @@ public class AppDeployer {
         // Now check for the version
         String appBasPath = "/repositories/" + appName + "/";
         String versionPath = appBasPath + versionName;
-        if ( !doesExist(versionPath) ) {
-            if ( createVersion(appBasPath, versionName) ) {
+        if (!doesExist(versionPath)) {
+            if (createVersion(appBasPath, versionName)) {
                 log.info("Created version {}", versionName);
             } else {
                 throw new RuntimeException("Couldnt create version " + versionPath);
@@ -372,9 +382,9 @@ public class AppDeployer {
             String res = client.post("/manageApps/", params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Created ok");
                     return true;
                 }
@@ -393,14 +403,14 @@ public class AppDeployer {
             List<PropFindResponse> list = client.propFind(p, 1, RespUtils.davName("name"), RespUtils.davName("resourcetype"), RespUtils.davName("iscollection"));
             List<String> versions = new ArrayList<>();
             for (PropFindResponse l : list) {
-                if ( l.isCollection() ) {
+                if (l.isCollection()) {
                     String name = l.getName();
-                    if ( !name.equals("live-videos") ) {
+                    if (!name.equals("live-videos")) {
                         versions.add(name);
                     }
                 }
             }
-            if ( versions.isEmpty() ) {
+            if (versions.isEmpty()) {
                 throw new RuntimeException("Cannot create a version because there is no initial version: " + appBasPath);
             }
             versions.sort(ComparatorUtils.NATURAL_COMPARATOR);
@@ -415,9 +425,9 @@ public class AppDeployer {
             String res = client.post(version1, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Created ok");
 
                     // always publish new versions
@@ -445,9 +455,9 @@ public class AppDeployer {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Published ok");
                     return true;
                 }
@@ -472,9 +482,9 @@ public class AppDeployer {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Published ok");
                     return true;
                 }
@@ -497,9 +507,9 @@ public class AppDeployer {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if ( statusOb != null ) {
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
-                if ( st ) {
+                if (st) {
                     log.info("Published ok");
                     return true;
                 }
@@ -513,25 +523,25 @@ public class AppDeployer {
     }
 
     private boolean isProcess(File appDir) {
-        if( appIds == null || appIds.isEmpty()) {
+        if (appIds == null || appIds.isEmpty()) {
             return true;
         }
-        for( String s : appIds) {
-            if( s.startsWith("/")) {
+        for (String s : appIds) {
+            if (s.startsWith("/")) {
                 String dirName = s.substring(1);
-                if( appDir.getParentFile().getName().equals(dirName)) {
+                if (appDir.getParentFile().getName().equals(dirName)) {
                     return true;
                 }
             }
-            if( s.equals(appDir.getName())) {
+            if (s.equals(appDir.getName())) {
                 return true;
             }
         }
         return false;
     }
 
-
     public class AppDeployerBlobStore implements BlobStore {
+
         private final BlobStore local;
         private final BlobStore remote;
 
@@ -549,7 +559,7 @@ public class AppDeployer {
         @Override
         public byte[] getBlob(String hash) {
             byte[] arr = local.getBlob(hash);
-            if( arr != null ) {
+            if (arr != null) {
                 return arr;
             }
             return remote.getBlob(hash);
@@ -570,7 +580,6 @@ public class AppDeployer {
             this.local = local;
             this.remote = remote;
         }
-
 
         @Override
         public void setChunkFanout(String hash, List<String> blobHashes, long actualContentLength) {
