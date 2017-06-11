@@ -74,6 +74,7 @@ public class AppDeployer {
         if (versionFile.exists()) {
             try {
                 String version = FileUtils.readFileToString(versionFile);
+                version = version.trim();
                 return version;
             } catch (IOException ex) {
                 log.error("Couldnt read version file " + versionFile.getAbsolutePath());
