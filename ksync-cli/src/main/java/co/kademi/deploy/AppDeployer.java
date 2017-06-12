@@ -206,9 +206,9 @@ public class AppDeployer {
                         if (!addToMarketPlace(appName)) {
                             throw new RuntimeException("Failed to add app to marketplace " + appPath);
                         }
-                        if (!publishApp(appName)) {
-                            throw new RuntimeException("Failed to publish app to marketplace " + appPath);
-                        }
+                    }
+                    if (!publishApp(appName)) {
+                        throw new RuntimeException("Failed to publish app to marketplace " + appPath);
                     }
                 }
             }
@@ -349,12 +349,18 @@ public class AppDeployer {
         String appBasPath = "/repositories/" + appName + "/";
         String versionPath = appBasPath + versionName;
         if (!doesExist(versionPath)) {
+            log.info("Version does not exist app={} version={}", appName, versionName);
             if (createVersion(appBasPath, versionName)) {
                 log.info("Created version {}", versionName);
             } else {
                 throw new RuntimeException("Couldnt create version " + versionPath);
             }
+        } else {
+            log.info("Version already exists app={} version={}", appName, versionName);
         }
+        // always publish new versions
+        publishVersion(appBasPath, versionName);
+        
     }
 
     private boolean doesExist(String path) {
@@ -406,7 +412,7 @@ public class AppDeployer {
             for (PropFindResponse l : list) {
                 if (l.isCollection()) {
                     String name = l.getName();
-                    if (!name.equals("live-videos")) {
+                    if (!name.equals("live-videos") && !name.startsWith("version")) {
                         versions.add(name);
                     }
                 }
@@ -416,7 +422,7 @@ public class AppDeployer {
             }
             versions.sort(ComparatorUtils.NATURAL_COMPARATOR);
             String highestVersion = versions.get(versions.size() - 1);
-            log.info("Found highest version {}", highestVersion);
+            log.info("Found highest version {} of app {}", highestVersion, appBasPath);
 
             String version1 = appBasPath + highestVersion;
             Map<String, String> params = new HashMap<>();
@@ -430,10 +436,6 @@ public class AppDeployer {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
                     log.info("Created ok");
-
-                    // always publish new versions
-                    publishVersion(appBasPath, versionName);
-
                     return true;
                 }
             }
@@ -446,8 +448,15 @@ public class AppDeployer {
 
     }
 
+    /**
+     * Make this the live branch
+     *
+     * @param appBasPath
+     * @param versionName
+     * @return
+     */
     private boolean publishVersion(String appBasPath, String versionName) {
-        log.info("publishVersion");
+        log.info("publishVersion: app path={} version={}", appBasPath, versionName);
         // http://localhost:8080/repositories/test1/1.0.0/publish
         String pubPath = appBasPath + versionName + "/publish";
         Map<String, String> params = new HashMap<>();
@@ -473,7 +482,7 @@ public class AppDeployer {
     }
 
     private boolean addToMarketPlace(String appName) {
-        log.info("publishVersion");
+        log.info("addToMarketPlace: {}", appName);
         // http://localhost:8080/manageApps/test1/
         String pubPath = "/manageApps/" + appName + "/";
         Map<String, String> params = new HashMap<>();
@@ -499,7 +508,7 @@ public class AppDeployer {
     }
 
     private boolean publishApp(String appName) {
-        log.info("publishVersion");
+        log.info("publishApp: {}", appName);
         // http://localhost:8080/manageApps/test1/
         String pubPath = "/manageApps/" + appName + "/";
         Map<String, String> params = new HashMap<>();
@@ -508,7 +517,7 @@ public class AppDeployer {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if (statusOb != null) {
+            if (statusOb != null) { 
                 Boolean st = (Boolean) statusOb;
                 if (st) {
                     log.info("Published ok");
