@@ -52,6 +52,8 @@ public class AppDeployer {
 
     private static final org.slf4j.Logger log = LoggerFactory.getLogger(AppDeployer.class);
 
+    public static final String DEFAULT_VERSION = "1.0.0";
+
     private static String readLine(Console con, Scanner scanner, String msg) {
         System.out.println(msg + ": ");
         if (con != null) {
@@ -74,13 +76,22 @@ public class AppDeployer {
         if (versionFile.exists()) {
             try {
                 String version = FileUtils.readFileToString(versionFile);
+
+                version = version == null ? null : version.trim();
+
+                if (StringUtils.isEmpty(version)) {
+                    log.error("findVersion: Version file " + versionFile.getAbsolutePath() + " is empty, assuming default 0001 version");
+
+                    return DEFAULT_VERSION;
+                }
+
                 return version;
             } catch (IOException ex) {
                 log.error("Couldnt read version file " + versionFile.getAbsolutePath());
             }
 
         }
-        return "0001";
+        return DEFAULT_VERSION;
     }
 
     public static void main(String[] args) throws MalformedURLException, IOException {
