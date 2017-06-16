@@ -113,6 +113,7 @@ public class KSync3 {
                 break;
             case "publish":
                 AppDeployer.main(arg);
+                
 
         }
     }

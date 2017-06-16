@@ -32,6 +32,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.collections.ComparatorUtils;
@@ -83,9 +85,31 @@ public class AppDeployer {
         }
         return "0001";
     }
+    
+    public static void incrementVersionNumber(File appDir, String versionName) {        
+        String s = getIncrementedVersionNumber(versionName);
+        File versionFile = new File(appDir, "app-version.txt");
+        try {
+            FileUtils.write(versionFile, s);
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+    
+    public static String getIncrementedVersionNumber(String versionName) {        
+        String[] arr = versionName.split("[.]");
+        int part = Integer.parseInt(arr[arr.length-1]);
+        part++;
+        String result = "";
+        for( int i=0; i<arr.length-1; i++) {
+            result += arr[i] + ".";
+        }
+        return result + part;
+    }
 
     public static void main(String[] args) throws MalformedURLException, IOException {
         String userDir = System.getProperty("user.dir");
+        userDir = "/home/brad/proj/kademi-dev/src/main/marketplace/";
         File dir = new File(userDir);
         if (!dir.exists()) {
             System.out.println("Dir not found: " + dir.getAbsolutePath());
@@ -182,36 +206,41 @@ public class AppDeployer {
 
                 if (isProcess(appDir)) {
 
-                    log.info("checkCreateApp {} {}", appName);
-                    String appPath = "/manageApps/" + appName;
-                    boolean appCreated = false;
-                    if (!doesExist(appPath)) {
-                        if (createApp(appName, isTheme, isApp)) {
-                            appCreated = true;
-                            log.info("created app {}", appName);
-                        } else {
-                            throw new RuntimeException("Couldnt create app " + appName);
-                        }
-                    }
-
-//                try {
-//                    createVersion(" /repositories/d3-lib/3.4.1 -> 1.0.0", "1.0.0");
-//                } catch (Exception e) {
-//                    System.out.println("eek");
-//                }
-                    String versionName = AppDeployer.findVersion(appDir);
-                    upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
-
-                    if (appCreated) {
-                        if (!addToMarketPlace(appName)) {
-                            throw new RuntimeException("Failed to add app to marketplace " + appPath);
-                        }
-                    }
-                    if (!publishApp(appName)) {
-                        throw new RuntimeException("Failed to publish app to marketplace " + appPath);
-                    }
+                    processAppDir(appName, isTheme, isApp, appDir);
                 }
             }
+        }
+    }
+
+    private void processAppDir(String appName, boolean isTheme, boolean isApp, File appDir) throws RuntimeException {
+        log.info("checkCreateApp {} {}", appName);
+        String appPath = "/manageApps/" + appName;
+        boolean appCreated = false;
+        if (!doesExist(appPath)) {
+            if (createApp(appName, isTheme, isApp)) {
+                appCreated = true;
+                log.info("created app {}", appName);
+            } else {
+                throw new RuntimeException("Couldnt create app " + appName);
+            }
+        }
+
+        String versionName = AppDeployer.findVersion(appDir);
+        String appVersionPath = "/repositories/" + appName + "/" + versionName + "/";
+        if (!doesExist(appVersionPath)) {
+            upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
+
+            if (appCreated) {
+                if (!addToMarketPlace(appName)) {
+                    throw new RuntimeException("Failed to add app to marketplace " + appPath);
+                }
+            }
+            if (!publishApp(appName)) {
+                throw new RuntimeException("Failed to publish app to marketplace " + appPath);
+            }
+            incrementVersionNumber(appDir, versionName);
+        } else {
+            log.info("App version is already published " + appVersionPath);
         }
     }
 
@@ -360,7 +389,7 @@ public class AppDeployer {
         }
         // always publish new versions
         publishVersion(appBasPath, versionName);
-        
+
     }
 
     private boolean doesExist(String path) {
@@ -517,7 +546,7 @@ public class AppDeployer {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
-            if (statusOb != null) { 
+            if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
                     log.info("Published ok");
