@@ -100,8 +100,6 @@ public class KSync3 {
             System.err.println("Parsing failed.  Reason: " + exp.getMessage());
             return;
         }
-
-        System.out.println(line.hasOption("report"));
         
         Command cmd = KSync3Utils.findCommand(line, commands);
 

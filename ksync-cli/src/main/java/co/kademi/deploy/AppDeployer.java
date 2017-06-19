@@ -57,23 +57,6 @@ public class AppDeployer {
 
     public static final String DEFAULT_VERSION = "1.0.0";
 
-    private static String readLine(Console con, Scanner scanner, String msg) {
-        System.out.println(msg + ": ");
-        if (con != null) {
-            return con.readLine();
-        }
-        return scanner.next();
-    }
-
-    private static String readPassword(Console con, Scanner scanner, String msg) {
-        System.out.println(msg + ": ");
-        if (con != null) {
-            char[] cars = con.readPassword();
-            return new String(cars);
-        }
-        return scanner.next();
-    }
-
     public static String findVersion(File appDir) {
         File versionFile = new File(appDir, "app-version.txt");
         if (versionFile.exists()) {
