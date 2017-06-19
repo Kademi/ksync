@@ -3,6 +3,7 @@
  */
 package co.kademi.deploy;
 
+import co.kademi.sync.KSync3Utils;
 import io.milton.common.Path;
 import io.milton.event.EventManagerImpl;
 import io.milton.http.exceptions.BadRequestException;
@@ -32,10 +33,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.Options;
 import org.apache.commons.collections.ComparatorUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -117,53 +118,32 @@ public class AppDeployer {
         return result + part;
     }
 
-    public static void main(String[] args) throws MalformedURLException, IOException {
-        String userDir = System.getProperty("user.dir");
-        userDir = "/home/brad/proj/kademi-dev/src/main/marketplace/";
-        File dir = new File(userDir);
+    public static void publish(Options options, CommandLine line) throws MalformedURLException, IOException {
+        File dir = KSync3Utils.getRootDir(line);
+        //userDir = "/home/brad/proj/kademi-dev/src/main/marketplace/";
+
         if (!dir.exists()) {
             System.out.println("Dir not found: " + dir.getAbsolutePath());
             return;
         }
         log.info("Current directory: " + dir.getAbsolutePath());
-        String url;
-        String user;
-        String password;
-        String appIds;
-
-        if (args.length >= 4) {
-            url = args[0];
-            user = args[1];
-            password = args[2];
-            appIds = args[3];
-        } else {
-            Console con = System.console();
-            Scanner scanner = null;
-            if (con == null) {
-                scanner = new Scanner(System.in);
-            }
-            url = readLine(con, scanner, "Please enter a host url, eg http://localhost:8080/");
-            user = readLine(con, scanner, "Please enter your userid (not email)");
-            password = readPassword(con, scanner, "Please enter your password");
-
-            appIds = readLine(con, scanner, "* to load all apps, or enter a comma seperated list of ids or absolute paths, eg /libs");
-            if (appIds.equals("*")) {
-                appIds = "";
-            }
-
-            System.out.println("Cheers..");
-        }
-
-        boolean autoIncrement = false;
-        for (String s : args) {
-            if (s.equals("-autoincrement")) {
-                autoIncrement = true;
-            }
-        }
+        String url = KSync3Utils.getInput(options, line, "url", null);
+        String user = KSync3Utils.getInput(options, line, "user", null);
+        String password = KSync3Utils.getPassword(line, user, url);
+        String appIds = KSync3Utils.getInput(options, line, "appids", null);
 
         AppDeployer d = new AppDeployer(dir, url, user, password, appIds);
-        d.setAutoIncrement(autoIncrement);
+        d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
+        d.force = KSync3Utils.getBooleanInput(line, "force");
+        d.report = KSync3Utils.getBooleanInput(line, "report");
 
+        log.info("---- OPTIONS ----");
+        log.info("url: " + url);
+        log.info("dir: " + dir.getAbsolutePath());
+        log.info("  -autoincrement: " + d.autoIncrement);
+        log.info("  -report: " + d.report);
+        log.info("  -force: " + d.force);
+        log.info("--------------");
         d.upsync();
 
         log.info("Completed");
@@ -181,7 +161,9 @@ public class AppDeployer {
     private final BlobStore localBlobStore;
     private final HashStore localHashStore;
 
-    private boolean autoIncrement = false;
+    private boolean autoIncrement = false; // if true, update version numbers in files
+    private boolean report; // if true, dont make any changes
+    private boolean force;
 
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds) throws MalformedURLException {
         this.rootDir = dir;
@@ -226,12 +208,12 @@ public class AppDeployer {
         System.out.println("");
         System.out.println("");
         System.out.println("-------- RESULTS -------------");
-        for( String s : results) {
+        for (String s : results) {
             System.out.println(s);
         }
         System.out.println("");
         System.out.println("");
-        System.out.println("");        
+        System.out.println("");
     }
 
     private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp) throws IOException {
@@ -267,60 +249,94 @@ public class AppDeployer {
 
         String versionName = AppDeployer.findVersion(appDir);
         String appVersionPath = "/repositories/" + appName + "/" + versionName + "/";
-        if (!doesExist(appVersionPath)) {
-            upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
+        boolean doesVersionExist = doesExist(appVersionPath);
 
-            if (appCreated) {
-                if (!addToMarketPlace(appName)) {
-                    return "Failed to add app to marketplace " + appPath;
-                }
-                if (!publishApp(appName)) {
-                    return "Failed to publish app to marketplace " + appPath;
-                }
-            }
-
-            String branchPath = "/repositories/" + appName + "/";
-            if (publishVersion(branchPath, versionName)) {
-                if (autoIncrement) {
-                    incrementVersionNumber(appDir, versionName);
-                }
-                return "Published " + appName + " version " + versionName;
-            } else {
-                return "Failed to publish " + appName;
-            }
-        } else {
+        if (doesVersionExist) {
             log.info("App version is already published " + appVersionPath);
 
             // Check that local and remote hashes match, and warn if they dont
             String localHash = getLocalHash(appName, versionName, appDir);
             if (localHash == null) {
                 log.warn("Could not get local hash for " + appDir);
-                return appName + " version " + versionName + " is already published, but could not find local hash to compare";
+                if (!force) {
+                    return appName + " version " + versionName + " is already published, but could not find local hash to compare";
+                }
             } else {
                 String branchPath = "/repositories/" + appName + "/" + versionName + "/";
                 String remoteHash = getRemoteHash(branchPath);
                 if (localHash.equals(remoteHash)) {
-                    log.info("App is an exact match local and remote ={}", localHash);
-                    return appName + " version " + versionName + " is already published, and exactly matches local " + localHash;
+                    if (force) {
+                        log.info("App is an exact match local and remote ={} but force is true, so push anyway", localHash);
+                    } else {
+                        log.info("App is an exact match local and remote ={}", localHash);
+                        return appName + " version " + versionName + " is already published, and exactly matches local " + localHash;
+                    }
                 } else {
-                    log.warn("App is not the same as published version. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
-                    return "WARN " + appName + " version " + versionName + " is already published, bu differs frmo local=" + localHash + " remote=" + remoteHash;
+                    if (force) {
+                        log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
+                    } else {
+                        log.warn("App is not the same as published version. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
+                        return "WARN " + appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash;
+                    }
+                }
+            }
+        }
+
+        String localHash = upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
+        if (localHash != null) {
+
+            if (appCreated) {
+                if (!addToMarketPlace(appName)) {
+                    return "Did not add app to marketplace " + appPath;
+                }
+                if (!publishApp(appName)) {
+                    return "Did not publish app to marketplace " + appPath;
                 }
             }
 
+            String branchPath = "/repositories/" + appName + "/";
+
+            if (publishVersion(branchPath, versionName)) {
+                if (autoIncrement) {
+                    if (report) {
+                        log.info("Would have auto-incremented " + appDir);
+                    } else {
+                        incrementVersionNumber(appDir, versionName);
+                    }
+                }
+                if( report ) {
+                    return "Would have published " + appName + " version " + versionName + " with hash " + localHash;
+                } else {
+                    return "Published " + appName + " version " + versionName + " with hash " + localHash;
+                }
+            } else {
+                if (report) {
+                    return "Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash;
+                } else {
+                    return "Failed to publish version " + appName;
+                }
+            }
+        } else {
+            return "Failed to sync local to remote " + appName;
         }
+
     }
 
-    private void upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir) {
+    private String upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir) {
         log.info("upSyncMarketplaceVersionDir app={}", appName);
         try {
             checkCreateAppVersion(appName, versionName, theme, app);
 
             String branchPath = "/repositories/" + appName + "/" + versionName + "/";
 
-            HttpBloomFilterHashCache blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
-            HttpBloomFilterHashCache chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
-            HttpBloomFilterHashCache fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
+            HttpBloomFilterHashCache blobsHashCache = null;
+            HttpBloomFilterHashCache chunckFanoutHashCache = null;
+            HttpBloomFilterHashCache fileFanoutHashCache = null;
+            if (!report) {
+                blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
+                chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
+                fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
+            }
 
             httpBlobStore = new HttpBlobStore(client, blobsHashCache);
             httpBlobStore.setBaseUrl("/_hashes/blobs/");
@@ -332,8 +348,15 @@ public class AppDeployer {
             MinimalPutsBlobStore mpBlobStore = new MinimalPutsBlobStore(httpBlobStore);
             MinimalPutsHashStore mpHashStore = new MinimalPutsHashStore(httpHashStore);
 
-            AppDeployerBlobStore blobStore = new AppDeployerBlobStore(localBlobStore, mpBlobStore);
-            AppDeployerHashStore hashStore = new AppDeployerHashStore(localHashStore, mpHashStore);
+            BlobStore blobStore;
+            HashStore hashStore;
+            if (report) {
+                blobStore = localBlobStore;
+                hashStore = localHashStore;
+            } else {
+                blobStore = new AppDeployerBlobStore(localBlobStore, mpBlobStore);
+                hashStore = new AppDeployerHashStore(localHashStore, mpHashStore);
+            }
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
                 try {
@@ -344,13 +367,14 @@ public class AppDeployer {
                     log.error("Exception in file changed event handler", ex);
                 }
             }, null, null);
-            s.scan();
+            return s.scan();
         } catch (Exception ex) {
             log.error("Exception upsyncing " + appName, ex);
+            return null;
         }
     }
 
-    private void push(String localRootHash, String branchPath) throws IOException, InterruptedException {
+    private void push(String localRootHash, String branchPath) {
         String remoteHash = getRemoteHash(branchPath);
         if (remoteHash == null) {
             log.info("Aborted");
@@ -358,6 +382,10 @@ public class AppDeployer {
         }
         if (remoteHash.equals(localRootHash)) {
             log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
+            return;
+        }
+        if (report) {
+            log.info("Not doing push {} because in report mode", branchPath);
             return;
         }
 
@@ -428,7 +456,8 @@ public class AppDeployer {
             push(localRootHash, branchPath);
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
-            log.error("Exception setting hash", ex);
+            results.add("EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
+            throw new RuntimeException(ex);
         }
     }
 
@@ -476,6 +505,10 @@ public class AppDeployer {
     }
 
     private boolean createApp(String appName, boolean isTheme, boolean isApp) {
+        if (report) {
+            log.info("Not doing create app {} because in report mode", appName);
+            return false;
+        }
         Map<String, String> params = new HashMap<>();
         params.put("newAppName", appName);
         params.put("newTitle", appName);
@@ -502,6 +535,10 @@ public class AppDeployer {
     }
 
     private boolean createVersion(String appBasPath, String versionName) {
+        if (report) {
+            log.info("Not doing create version {}/{} because in report mode", appBasPath, versionName);
+            return false;
+        }
         try {
             Path p = Path.path(appBasPath);
             List<PropFindResponse> list = client.propFind(p, 1, RespUtils.davName("name"), RespUtils.davName("resourcetype"), RespUtils.davName("iscollection"));
@@ -549,6 +586,10 @@ public class AppDeployer {
 
     private boolean addToMarketPlace(String appName) {
         log.info("addToMarketPlace: {}", appName);
+        if (report) {
+            log.info("Not doing addToMarketPlace {} because in report mode", appName);
+            return false;
+        }
         // http://localhost:8080/manageApps/test1/
         String pubPath = "/manageApps/" + appName + "/";
         Map<String, String> params = new HashMap<>();
@@ -575,6 +616,10 @@ public class AppDeployer {
 
     private boolean publishApp(String appName) {
         log.info("publishApp: {}", appName);
+        if (report) {
+            log.info("Not doing publishApp {} because in report mode", appName);
+            return false;
+        }
         // http://localhost:8080/manageApps/test1/
         String pubPath = "/manageApps/" + appName + "/";
         Map<String, String> params = new HashMap<>();
@@ -607,6 +652,10 @@ public class AppDeployer {
      */
     private boolean publishVersion(String appBasPath, String versionName) {
         log.info("publishVersion: app path={} version={}", appBasPath, versionName);
+        if (report) {
+            log.info("Not doing publishVersion {}/{} because in report mode", appBasPath, versionName);
+            return false;
+        }
         // http://localhost:8080/repositories/test1/1.0.0/publish
         String pubPath = appBasPath + "/" + versionName + "/publish";
         Map<String, String> params = new HashMap<>();
@@ -640,6 +689,9 @@ public class AppDeployer {
                 if (appDir.getParentFile().getName().equals(dirName)) {
                     return true;
                 }
+            }
+            if (s.equals("*")) {
+                return true;
             }
             if (s.equals(appDir.getName())) {
                 return true;

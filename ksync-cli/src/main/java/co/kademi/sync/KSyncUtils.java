@@ -6,14 +6,11 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.function.Consumer;
 import net.sf.json.JSONArray;
-import org.hashsplit4j.api.BlobStore;
-import org.hashsplit4j.api.Fanout;
-import org.hashsplit4j.api.HashStore;
+import org.apache.commons.cli.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,7 +22,7 @@ public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
 
-    public static void withDir(Consumer<File> s) {
+    public static void withDir(Consumer<File> s, Options options) {
         String curDir = System.getProperty("user.dir");
         File dir = new File(curDir);
 
@@ -40,7 +37,7 @@ public class KSyncUtils {
         }
     }
 
-    public static void withKSync(KSyncCommand c) {
+    public static void withKSync(KSyncCommand c, Options options) {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             Properties props = KSyncUtils.readProps(configDir);
@@ -64,7 +61,7 @@ public class KSyncUtils {
             } catch (IOException ex) {
                 System.out.println("Ex: " + ex.getMessage());
             }
-        });
+        }, options);
     }
 
     public interface KSyncCommand {

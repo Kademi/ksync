@@ -17,7 +17,6 @@ import io.milton.sync.triplets.DeltaGenerator;
 import io.milton.sync.triplets.FileUpdatingMergingDeltaListener;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
 import java.io.ByteArrayInputStream;
-import java.io.Console;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -28,7 +27,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -36,6 +34,10 @@ import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Combiner;
@@ -59,83 +61,187 @@ public class KSync3 {
 
     private static final Logger log = LoggerFactory.getLogger(KSync3.class);
 
+    private static final List<Command> commands = new ArrayList<>();
+
+    static {
+        commands.add(new UsageCommand());
+        commands.add(new CheckoutCommand());
+        commands.add(new PushCommand());
+        commands.add(new PullCommand());
+        commands.add(new SyncCommand());
+        commands.add(new PublishCommand());
+    }
+
     public static void main(String[] arg) throws IOException {
 
+        String commandsSt = "";
+        for (Command c : commands) {
+            commandsSt += c.getName() + ",";
+        }
+
         Options options = new Options();
-        options.addOption("t", false, "display current time");
+        options.addOption("command", true, "One of " + commandsSt);
+        options.addOption("rootdir", true, "Root directory, which will contain folders 'apps', 'libs' and 'themes', each of which should contain the app folder to publish ");
+        options.addOption("url", true, "URL to use, for checkout and publish");
+        options.addOption("user", true, "username to use, for checkout and publish. Not your email address");
+        options.addOption("password", true, "password to login with, for checkout and publish. Not your email address. Will prompt if needed and not provided");
+        options.addOption("report", false, "Display report only, do not make changes (for publish command only)");
+        options.addOption("versionincrement", false, "Update version files (for publish command only)");
+        options.addOption("force", false, "Update already published apps (for publish command only)");
+        options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
 
-        List<String> list = new ArrayList<>();
-        for (String s : arg) {
-            list.add(s);
+        CommandLineParser parser = new DefaultParser();
+        CommandLine line;
+        try {
+            // parse the command line arguments
+            line = parser.parse(options, arg);
+        } catch (Exception exp) {
+            // oops, something went wrong
+            System.err.println("Parsing failed.  Reason: " + exp.getMessage());
+            return;
         }
 
-        if( list.isEmpty()) {
-            System.out.println("Please enter a command - checkout, commit, pull, push, sync, publish");
-            return ;
+        System.out.println(line.hasOption("report"));
+        
+        Command cmd = KSync3Utils.findCommand(line, commands);
+
+        if (cmd == null) {
+            System.out.println("Please enter a command - " + commandsSt);
+            return;
         }
 
-        String cmd = arg[0];
-        switch (cmd) {
-            case "checkout":
-                if (arg.length < 3) {
-                    System.out.println("Expected 3 arguments - checkout [url] [user]");
-                } else {
-                    String url = arg[1];
-                    String user = arg[2];
-                    checkout(url, user);
-                }
-                System.exit(0); // threads arent shutting down
-                break;
-            case "commit":
-                commit();
-                System.exit(0); // threads arent shutting down
-                break;
-            case "pull":
-                pull();
-                System.exit(0); // threads arent shutting down
-                break;
-
-            case "push":
-                push();
-                System.exit(0); // threads arent shutting down
-                break;
-            case "sync":
-                sync();
-                boolean done = false;
-                while (!done) {
-                    try {
-                        Thread.sleep(200);
-                    } catch (InterruptedException interruptedException) {
-                        done = true;
-                    }
-                }
-                System.exit(0); // threads arent shutting down
-                break;
-            case "publish":
-                AppDeployer.main(arg);
-                
-
-        }
-    }
-
-    public static void showUsage() {
+        cmd.execute(options, line);
 
     }
 
-    private static void checkout(String url, String user) {
-        KSyncUtils.withDir((File dir) -> {
-            System.out.println("Enter your password for " + user + "@" + url + ":");
+    public interface Command {
 
-            Console con = System.console();
-            String pwd;
-            if (con != null) {
-                char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
-                pwd = new String(chars);
-            } else {
-                Scanner scanner = new Scanner(System.in);
-                System.out.println("Enter your password for " + user + "@" + url + ":");
-                pwd = scanner.next();
+        String getName();
+
+        void execute(Options options, CommandLine line);
+    }
+
+    public static class CheckoutCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "checkout";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            checkout(options, line);
+        }
+
+    }
+
+    public static class UsageCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "usage";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            showUsage(options);
+        }
+
+    }
+
+    public static class CommitCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "commit";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            commit(options);
+        }
+
+    }
+
+    public static class PullCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "pull";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            pull(options);
+        }
+
+    }
+
+    public static class PushCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "push";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            push(options);
+        }
+
+    }
+
+    public static class SyncCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "sync";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            sync(options);
+            boolean done = false;
+            while (!done) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException interruptedException) {
+                    done = true;
+                }
             }
+            System.exit(0); // threads arent shutting down
+        }
+
+    }
+
+    public static class PublishCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "publish";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            try {
+                AppDeployer.publish(options, line);
+            } catch (IOException ex) {
+                log.error("Invalie URL", ex);
+            }
+        }
+
+    }
+
+    public static void showUsage(Options options) {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.printHelp("ksync3", options);
+    }
+
+    private static void checkout(Options options, CommandLine line) {
+        KSyncUtils.withDir((File dir) -> {
+            String url = KSync3Utils.getInput(options, line, "url", null);
+            String user = KSync3Utils.getInput(options, line, "user", null);
+            String pwd = KSync3Utils.getPassword(line, url, user);
 
             File repoDir = new File(dir, ".ksync");
             repoDir.mkdirs();
@@ -148,45 +254,45 @@ public class KSync3 {
                 System.out.println("Could not checkout: " + ex.getMessage());
             }
 
-        });
+        }, options);
     }
 
-    private static void commit() {
+    private static void commit(Options options) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.commit(configDir);
-        });
+        }, options);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void push() {
+    private static void push(Options options) {
         log.info("push");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.info("do push {}", configDir);
             k.push(configDir);
-        });
+        }, options);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void sync() {
+    private static void sync(Options options) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.start();
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        });
+        }, options);
         System.out.println("finished initial scan");
 
     }
 
-    private static void pull() {
+    private static void pull(Options options) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        });
+        }, options);
         System.out.println("finished");
         System.exit(0); // threads arent shutting down
     }
@@ -206,6 +312,11 @@ public class KSync3 {
     private final HashCalc hashCalc = HashCalc.getInstance();
     private final String branchPath;
     private final Counter transferQueueCounter = new Counter();
+    
+    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
+    private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+    
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir) throws MalformedURLException, IOException {
         this.localDir = localDir;
@@ -256,9 +367,6 @@ public class KSync3 {
         log.info("Done monitor init");
     }
 
-    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
-    private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
 
     private void push(String localRootHash, File configDir) throws IOException, InterruptedException {
         String remoteHash = getRemoteHash(branchPath);
