@@ -272,33 +272,33 @@ public class AppDeployer {
                 if (!addToMarketPlace(appName)) {
                     return "Did not add app to marketplace " + appPath;
                 }
-                if (!publishApp(appName)) {
-                    return "Did not publish app to marketplace " + appPath;
-                }
             }
 
             String branchPath = "/repositories/" + appName + "/";
 
-            if (publishVersion(branchPath, versionName)) {
-                if (autoIncrement) {
-                    if (report) {
-                        log.info("Would have auto-incremented " + appDir);
-                    } else {
-                        incrementVersionNumber(appDir, versionName);
-                    }
-                }
-                if( report ) {
-                    return "Would have published " + appName + " version " + versionName + " with hash " + localHash;
-                } else {
-                    return "Published " + appName + " version " + versionName + " with hash " + localHash;
-                }
+            if (report) {
+                return "Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash;
             } else {
-                if (report) {
-                    return "Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash;
+                if (makeCurrentVersionLive(branchPath, versionName)) {
+                    // Republic, so the live version is the published version
+                    if (!publishApp(appName)) {
+                        return "Pushed, but could not (re)publish app to marketplace " + appPath;
+                    }
+                    
+                    if (autoIncrement) {
+                        if (report) {
+                            log.info("Would have auto-incremented " + appDir);
+                        } else {                            
+                            incrementVersionNumber(appDir, versionName);
+                        }
+                    }
+
+                    return "Published " + appName + " version " + versionName + " with hash " + localHash;
                 } else {
                     return "Failed to publish version " + appName;
                 }
             }
+
         } else {
             return "Failed to sync local to remote " + appName;
         }
@@ -633,7 +633,7 @@ public class AppDeployer {
      * @param versionName
      * @return
      */
-    private boolean publishVersion(String appBasPath, String versionName) {
+    private boolean makeCurrentVersionLive(String appBasPath, String versionName) {
         log.info("publishVersion: app path={} version={}", appBasPath, versionName);
         if (report) {
             log.info("Not doing publishVersion {}/{} because in report mode", appBasPath, versionName);
