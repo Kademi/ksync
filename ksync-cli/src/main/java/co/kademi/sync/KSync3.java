@@ -598,7 +598,7 @@ public class KSync3 {
             log.error("interripted", ex);
             return;
         }
-        pull(hash, this.localDir); // pull from local blobstore into local vfs
+        pull(hash, this.localDir, ignores); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
 
     }
@@ -658,7 +658,7 @@ public class KSync3 {
         } catch (Exception e) {
             String errMsg = "Could not fetch directory " + filePath + " because " + e.getMessage();
             log.error(errMsg, e);
-            return ;
+            return;
         }
         for (ITriplet t : triplets) {
             if (!KSync3Utils.ignored(t.getName(), ignores)) {
@@ -684,23 +684,39 @@ public class KSync3 {
         }
     }
 
-    private void pull(String hash, File dir) {
+    private void pull(String hash, File dir, List<String> ignores) {
         log.info("pull: " + dir.getAbsolutePath());
-        List<ITriplet> triplets = getTriplets(hash, localBlobStore);
+        List<ITriplet> triplets;
+        try {
+            triplets = getTriplets(hash, localBlobStore);
+        } catch (Exception e) {
+            String errMsg = "Could not pull directory for " + dir.getAbsolutePath() + " with hash " + hash + " because " + e.getMessage();
+            errors.add(errMsg);
+            log.warn(errMsg, e);
+            return;
+        }
         for (ITriplet t : triplets) {
-            if (t.getType().equals("d")) {
-                File dir2 = new File(dir, t.getName());
-                dir2.mkdirs();
-                pull(t.getHash(), dir2);
-            } else {
-                Combiner c = new Combiner();
-                File dest = new File(dir, t.getName());
-                Fanout fileFanout = localHashStore.getFileFanout(t.getHash());
-                try (FileOutputStream fout = new FileOutputStream(dest)) {
-                    log.info("write local file: {}", dest.getAbsolutePath());
-                    c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
-                } catch (IOException ex) {
-                    throw new RuntimeException(ex);
+            if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                if (t.getType().equals("d")) {
+                    File dir2 = new File(dir, t.getName());
+                    dir2.mkdirs();
+                    pull(t.getHash(), dir2, ignores);
+                } else {
+                    Combiner c = new Combiner();
+                    File dest = new File(dir, t.getName());
+                    Fanout fileFanout = localHashStore.getFileFanout(t.getHash());
+                    if (fileFanout != null) {
+                        try (FileOutputStream fout = new FileOutputStream(dest)) {
+                            log.info("write local file: {}", dest.getAbsolutePath());
+                            c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
+                        } catch (IOException ex) {
+                            throw new RuntimeException(ex);
+                        }
+                    } else {
+                        String errMsg = "Could not get file fanout for hash " + t.getHash() + " in directory " + dir.getAbsolutePath();
+                        errors.add(errMsg);
+                        log.warn(errMsg);
+                    }
                 }
             }
         }
