@@ -104,7 +104,7 @@ public class KSync3 {
         Command cmd = KSync3Utils.findCommand(line, commands);
 
         if (cmd == null) {
-            System.out.println("Please enter a command - " + commandsSt);
+            showUsage(options);
             return;
         }
 
