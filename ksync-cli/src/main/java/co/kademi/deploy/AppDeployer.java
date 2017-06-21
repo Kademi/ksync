@@ -155,16 +155,7 @@ public class AppDeployer {
         client = new Host(url.getHost(), url.getPort(), user, password, null);
         client.setTimeout(30000);
         client.setUseDigestForPreemptiveAuth(false);
-        String s = sAppIds;
-        if (StringUtils.isBlank(s)) {
-            this.appIds = null;
-        } else {
-            this.appIds = new ArrayList<>();
-            for (String ss : s.split(",")) {
-                ss = ss.trim();
-                appIds.add(ss);
-            }
-        }
+        this.appIds = KSync3Utils.split(sAppIds);
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         File localDataDir = new File(tmpDir, "appDeployer");

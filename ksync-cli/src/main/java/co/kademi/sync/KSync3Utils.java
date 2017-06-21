@@ -4,6 +4,7 @@ import static co.kademi.deploy.AppDeployer.DEFAULT_VERSION;
 import java.io.Console;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
@@ -41,10 +42,10 @@ public class KSync3Utils {
             Option opt = options.getOption(optionName);
             Console con = System.console();
             if (con != null) {
-                s = con.readLine("Please enter " + optionName + " - " + opt.getDescription());
+                s = con.readLine("Please enter " + optionName + " - " + opt.getDescription() + ": ");
             } else {
                 Scanner scanner = new Scanner(System.in);
-                System.out.println("Please enter " + optionName + " - " + opt.getDescription());
+                System.out.println("Please enter " + optionName + " - " + opt.getDescription() + ": ");
                 s = scanner.nextLine();
             }
         }
@@ -56,11 +57,11 @@ public class KSync3Utils {
         if (StringUtils.isBlank(s)) {
             Console con = System.console();
             if (con != null) {
-                char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
+                char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ": ");
                 s = new String(chars);
             } else {
                 Scanner scanner = new Scanner(System.in);
-                System.out.println("Enter your password for " + user + "@" + url + ":");
+                System.out.println("Enter your password for " + user + "@" + url + ": ");
                 s = scanner.next();
             }
         }
@@ -96,6 +97,32 @@ public class KSync3Utils {
 
     public static boolean getBooleanInput(CommandLine line, String opt) {
         return line.hasOption(opt);
+    }
+
+    public static List<String> split(String s) {
+        String[] arr = s.split(",");
+        if (StringUtils.isBlank(s)) {
+            return null;
+        } else {
+            List<String> list = new ArrayList<>();
+            for (String ss : s.split(",")) {
+                ss = ss.trim();
+                list.add(ss);
+            }
+            return list;
+        }
+    }
+
+    static boolean ignored(String name, List<String> ignores) {
+        if( ignores == null ) {
+            return false;
+        }
+        for( String s : ignores) {
+            if( name.equals(s)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 }

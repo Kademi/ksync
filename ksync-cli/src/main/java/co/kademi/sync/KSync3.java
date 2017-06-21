@@ -89,6 +89,7 @@ public class KSync3 {
         options.addOption("versionincrement", false, "Update version files (for publish command only)");
         options.addOption("force", false, "Update already published apps (for publish command only)");
         options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
+        options.addOption("ignore", true, "Comma seperated list of file/folder names to ignore on checkout");
 
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
@@ -100,7 +101,7 @@ public class KSync3 {
             System.err.println("Parsing failed.  Reason: " + exp.getMessage());
             return;
         }
-        
+
         Command cmd = KSync3Utils.findCommand(line, commands);
 
         if (cmd == null) {
@@ -110,6 +111,16 @@ public class KSync3 {
 
         cmd.execute(options, line);
 
+    }
+
+    private void showErrors() {
+        if (!errors.isEmpty()) {
+            System.out.println("----- ERRORS -------");
+            for (String s : errors) {
+                System.out.println(s);
+            }
+            System.out.println("----------------------");
+        }
     }
 
     public interface Command {
@@ -240,6 +251,8 @@ public class KSync3 {
             String url = KSync3Utils.getInput(options, line, "url", null);
             String user = KSync3Utils.getInput(options, line, "user", null);
             String pwd = KSync3Utils.getPassword(line, url, user);
+            String sIgnores = KSync3Utils.getInput(options, line, "ignore", null);
+            List<String> ignores = KSync3Utils.split(sIgnores);
 
             File repoDir = new File(dir, ".ksync");
             repoDir.mkdirs();
@@ -247,9 +260,11 @@ public class KSync3 {
 
             try {
                 KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir);
-                kSync3.checkout(repoDir);
+                kSync3.checkout(repoDir, ignores);
+                kSync3.showErrors();
             } catch (IOException ex) {
                 System.out.println("Could not checkout: " + ex.getMessage());
+
             }
 
         }, options);
@@ -258,6 +273,7 @@ public class KSync3 {
     private static void commit(Options options) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.commit(configDir);
+            k.showErrors();
         }, options);
         System.exit(0); // threads arent shutting down
     }
@@ -267,6 +283,7 @@ public class KSync3 {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.info("do push {}", configDir);
             k.push(configDir);
+            k.showErrors();
         }, options);
         System.exit(0); // threads arent shutting down
     }
@@ -275,6 +292,7 @@ public class KSync3 {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.start();
+                k.showErrors();
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
@@ -287,6 +305,7 @@ public class KSync3 {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
+                k.showErrors();
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
@@ -310,11 +329,12 @@ public class KSync3 {
     private final HashCalc hashCalc = HashCalc.getInstance();
     private final String branchPath;
     private final Counter transferQueueCounter = new Counter();
-    
+
     private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
     private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
     private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
-    
+
+    private final List<String> errors = new ArrayList<>();
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir) throws MalformedURLException, IOException {
         this.localDir = localDir;
@@ -329,9 +349,26 @@ public class KSync3 {
         this.localBlobStore = new FileSystem2BlobStore(new File(repoDir, "blobs"));
         this.localHashStore = new FileSystem2HashStore(new File(repoDir, "hashes"));
 
-        HttpBloomFilterHashCache blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
-        HttpBloomFilterHashCache chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
-        HttpBloomFilterHashCache fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
+        HttpBloomFilterHashCache blobsHashCache = null;
+        try {
+            blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
+        } catch (Exception e) {
+            log.warn("Unable to load blobs bloom filter, so things will be a bit slow");
+        }
+
+        HttpBloomFilterHashCache chunckFanoutHashCache = null;
+        try {
+            chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
+        } catch (Exception e) {
+            log.warn("Unable to load chunks bloom filter, so things will be a bit slow");
+        }
+
+        HttpBloomFilterHashCache fileFanoutHashCache = null;
+        try {
+            fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
+        } catch (Exception e) {
+            log.warn("Unable to load files bloom filter, so things will be a bit slow");
+        }
 
         httpBlobStore = new HttpBlobStore(client, blobsHashCache);
         httpBlobStore.setBaseUrl("/_hashes/blobs/");
@@ -364,7 +401,6 @@ public class KSync3 {
         tripletStore.start();
         log.info("Done monitor init");
     }
-
 
     private void push(String localRootHash, File configDir) throws IOException, InterruptedException {
         String remoteHash = getRemoteHash(branchPath);
@@ -457,12 +493,12 @@ public class KSync3 {
             transferQueueCounter.up();
             transferExecutor.submit(() -> {
                 long tm = System.currentTimeMillis();
-                System.out.println("upload " + dirHash);
+                //System.out.println("upload " + dirHash);
                 httpBlobStore.setBlob(dirHash, dirListBlob);
                 transferQueueCounter.down();
-                System.out.println("done upload " + dirHash);
+                //System.out.println("done upload " + dirHash);
                 tm = System.currentTimeMillis() - tm;
-                log.info("Uploaded blob in {} ms", tm);
+                log.info("Transferred blob in {} ms", tm);
             });
         }
 
@@ -490,71 +526,81 @@ public class KSync3 {
             return;
         }
         log.info("Copy file {}", filePath);
-        Fanout fileFanout = sourceHashStore.getFileFanout(fileHash);
+        Fanout ff = null;
+        try {
+            ff = sourceHashStore.getFileFanout(fileHash);
 
-        final Counter c = new Counter();
-        for (String fanoutHash : fileFanout.getHashes()) {
-            Fanout fanout = sourceHashStore.getChunkFanout(fanoutHash);
-            List<String> hashes = fanout.getHashes();
-            for (String hash : hashes) {
-                if (!destBlobStore.hasBlob(hash)) {
-                    byte[] arr = sourceBlobStore.getBlob(hash);
+            Fanout fileFanout = ff;
+
+            final Counter c = new Counter();
+            for (String fanoutHash : fileFanout.getHashes()) {
+                Fanout fanout = sourceHashStore.getChunkFanout(fanoutHash);
+                List<String> hashes = fanout.getHashes();
+                for (String hash : hashes) {
+                    if (!destBlobStore.hasBlob(hash)) {
+                        byte[] arr = sourceBlobStore.getBlob(hash);
+                        c.up();
+                        transferQueueCounter.up();
+                        transferExecutor.submit(() -> {
+                            log.info("Copy file chunk hash={} file={} chunk size={} to blobstore {}", hash, filePath, arr.length, destBlobStore);
+                            destBlobStore.setBlob(hash, arr);
+                            c.down();
+                            transferQueueCounter.down();
+                            log.info("Finished Copy file chunk hash={}", hash);
+                        });
+                        log.info("queue size {}", transferJobs.size());
+                    }
+                }
+
+                if (!destHashStore.hasChunk(fanoutHash)) {
                     c.up();
                     transferQueueCounter.up();
                     transferExecutor.submit(() -> {
-                        log.info("Copy file chunk hash={} file={} chunk size={} to blobstore {}", hash, filePath, arr.length, destBlobStore);
-                        destBlobStore.setBlob(hash, arr);
+                        log.info("Transfer chunk hash={} num hashes={} ", filePath, fanout.getHashes().size());
+                        destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                         c.down();
                         transferQueueCounter.down();
-                        log.info("Finished Copy file chunk hash={}", hash);
+                        log.info("Finidh transfer chunk hash={} ", filePath);
                     });
-                    log.info("queue size {}", transferJobs.size());
+
                 }
             }
 
-            if (!destHashStore.hasChunk(fanoutHash)) {
-                c.up();
+            if (!destHashStore.hasFile(fileHash)) {
+                // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
+                log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
+                while (c.count > 0) {
+                    log.info("..waiting for transfers to complete. remaining={}", c.count);
+                    Thread.sleep(1000);
+                }
+                log.info("set file hash2");
                 transferQueueCounter.up();
                 transferExecutor.submit(() -> {
-                    log.info("Upload chunk hash={} num hashes={} ", filePath, fanout.getHashes().size());
-                    destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
-                    c.down();
+                    log.info("Upload file hash={} hash={} ", filePath, fileHash);
+                    destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
+                    log.info("Done {}", fileHash);
                     transferQueueCounter.down();
-                    log.info("Finidh Upload chunk hash={} ", filePath);
                 });
-
             }
-        }
-
-        if (!destHashStore.hasFile(fileHash)) {
-            // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-            log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
-            while (c.count > 0) {
-                log.info("..waiting for transfers to complete. remaining={}", c.count);
-                Thread.sleep(1000);
-            }
-            log.info("set file hash2");
-            transferQueueCounter.up();
-            transferExecutor.submit(() -> {
-                log.info("Upload file hash={} hash={} ", filePath, fileHash);
-                destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
-                log.info("Done {}", fileHash);
-                transferQueueCounter.down();
-            });
-
+        } catch (Exception e) {
+            String errMsg = "Could not retrieve file " + filePath + " because " + e.getMessage();
+            errors.add(errMsg);
+            log.error(errMsg, e);
+            return;
         }
     }
 
-    private void checkout(File configDir) {
+    private void checkout(File configDir, List<String> ignores) {
         String hash = getRemoteHash(branchPath);
         try {
-            fetch(Path.root, hash); // fetch into local blobstore
+            fetch(Path.root, hash, ignores); // fetch into local blobstore
         } catch (InterruptedException ex) {
             log.error("interripted", ex);
             return;
         }
         pull(hash, this.localDir); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
+
     }
 
     /**
@@ -569,7 +615,7 @@ public class KSync3 {
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         String remoteHash = getRemoteHash(branchPath);
         try {
-            fetch(Path.root, remoteHash); // fetch into local blobstore
+            fetch(Path.root, remoteHash, null); // fetch into local blobstore
         } catch (InterruptedException ex) {
             log.error("interripted", ex);
             return null;
@@ -599,19 +645,28 @@ public class KSync3 {
      *
      * @param hash
      */
-    private void fetch(Path filePath, String hash) throws InterruptedException {
-        _fetch(filePath, hash);
+    private void fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
+        _fetch(filePath, hash, ignores);
         log.info("fetch finished");
     }
 
-    private void _fetch(Path filePath, String hash) throws InterruptedException {
+    private void _fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
         log.info("fetch: {}", filePath);
-        List<ITriplet> triplets = getTriplets(hash, wrappedBlobStore);
+        List<ITriplet> triplets;
+        try {
+            triplets = getTriplets(hash, wrappedBlobStore);
+        } catch (Exception e) {
+            String errMsg = "Could not fetch directory " + filePath + " because " + e.getMessage();
+            log.error(errMsg, e);
+            return ;
+        }
         for (ITriplet t : triplets) {
-            if (t.getType().equals("d")) {
-                _fetch(filePath.child(t.getName()), t.getHash());
-            } else {
-                combineToLocal(filePath.child(t.getName()), t.getHash());
+            if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                if (t.getType().equals("d")) {
+                    _fetch(filePath.child(t.getName()), t.getHash(), ignores);
+                } else {
+                    combineToLocal(filePath.child(t.getName()), t.getHash());
+                }
             }
         }
     }
