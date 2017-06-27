@@ -20,7 +20,6 @@ import io.milton.sync.HttpHashStore;
 import io.milton.sync.MinimalPutsBlobStore;
 import io.milton.sync.MinimalPutsHashStore;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
-import java.io.Console;
 import java.io.File;
 import java.io.IOException;
 import java.net.ConnectException;
@@ -32,7 +31,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Scanner;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -275,11 +273,11 @@ public class AppDeployer {
                     if (!publishApp(appName)) {
                         return "Pushed, but could not (re)publish app to marketplace " + appPath;
                     }
-                    
+
                     if (autoIncrement) {
                         if (report) {
                             log.info("Would have auto-incremented " + appDir);
-                        } else {                            
+                        } else {
                             incrementVersionNumber(appDir, versionName);
                         }
                     }
@@ -299,7 +297,9 @@ public class AppDeployer {
     private String upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir) {
         log.info("upSyncMarketplaceVersionDir app={}", appName);
         try {
-            checkCreateAppVersion(appName, versionName, theme, app);
+            if (!checkCreateAppVersion(appName, versionName, theme, app)) {
+                return null;
+            }
 
             String branchPath = "/repositories/" + appName + "/" + versionName + "/";
 
@@ -445,7 +445,7 @@ public class AppDeployer {
         }
     }
 
-    private void checkCreateAppVersion(String appName, String versionName, boolean theme, boolean app) throws NotAuthorizedException, UnknownHostException, SocketTimeoutException, IOException, ConnectException, HttpException {
+    private boolean checkCreateAppVersion(String appName, String versionName, boolean theme, boolean app) throws NotAuthorizedException, UnknownHostException, SocketTimeoutException, IOException, ConnectException, HttpException {
 
         // Now check for the version
         String appBasPath = "/repositories/" + appName + "/";
@@ -455,12 +455,17 @@ public class AppDeployer {
             if (createVersion(appBasPath, versionName)) {
                 log.info("Created version {}", versionName);
             } else {
-                throw new RuntimeException("Couldnt create version " + versionPath);
+                if (report) {
+                    results.add("Would have created " + versionName + " because that version doesnt exist");
+                    return false;
+                } else {
+                    throw new RuntimeException("Couldnt create version " + versionPath);
+                }                
             }
         } else {
             log.info("Version already exists app={} version={}", appName, versionName);
         }
-
+        return true;
     }
 
     private boolean doesExist(String path) {
