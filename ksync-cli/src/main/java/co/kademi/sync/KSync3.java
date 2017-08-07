@@ -167,7 +167,7 @@ public class KSync3 {
 
         @Override
         public void execute(Options options, CommandLine line) {
-            commit(options);
+            commit(options, line);
         }
 
     }
@@ -181,7 +181,7 @@ public class KSync3 {
 
         @Override
         public void execute(Options options, CommandLine line) {
-            pull(options);
+            pull(options, line);
         }
 
     }
@@ -195,7 +195,7 @@ public class KSync3 {
 
         @Override
         public void execute(Options options, CommandLine line) {
-            push(options);
+            push(options, line);
         }
 
     }
@@ -209,7 +209,7 @@ public class KSync3 {
 
         @Override
         public void execute(Options options, CommandLine line) {
-            sync(options);
+            sync(options, line);
             boolean done = false;
             while (!done) {
                 try {
@@ -259,7 +259,7 @@ public class KSync3 {
             KSyncUtils.writeProps(url, user, repoDir);
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false);
                 kSync3.checkout(repoDir, ignores);
                 kSync3.showErrors();
             } catch (IOException ex) {
@@ -270,25 +270,25 @@ public class KSync3 {
         }, options);
     }
 
-    private static void commit(Options options) {
+    private static void commit(Options options, CommandLine line) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
-            k.commit(configDir);
+            k.commit();
             k.showErrors();
-        }, options);
+        }, line, options, false);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void push(Options options) {
+    private static void push(Options options, CommandLine line) {
         log.info("push");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.info("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
-        }, options);
+        }, line, options, false);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void sync(Options options) {
+    private static void sync(Options options, CommandLine line) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.start();
@@ -296,12 +296,12 @@ public class KSync3 {
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        }, options);
+        }, line, options, true);
         System.out.println("finished initial scan");
 
     }
 
-    private static void pull(Options options) {
+    private static void pull(Options options,CommandLine line) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
@@ -309,7 +309,7 @@ public class KSync3 {
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        }, options);
+        }, line, options, false);
         System.out.println("finished");
         System.exit(0); // threads arent shutting down
     }
@@ -336,7 +336,7 @@ public class KSync3 {
 
     private final List<String> errors = new ArrayList<>();
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background) throws MalformedURLException, IOException {
         this.localDir = localDir;
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
@@ -383,12 +383,14 @@ public class KSync3 {
         log.info("Init {}", localDir.getAbsolutePath());
 
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
-            try {
-                log.info("File changed in {}, new repo hash {}", localDir, rootHash);
-                push(rootHash, configDir);
+            if (background) {
+                try {
+                    log.info("File changed in {}, new repo hash {}", localDir, rootHash);
+                    push(rootHash, configDir);
 
-            } catch (Exception ex) {
-                log.error("Exception in file changed event handler", ex);
+                } catch (Exception ex) {
+                    log.error("Exception in file changed event handler", ex);
+                }
             }
         }, null, configDir);
 
@@ -415,9 +417,8 @@ public class KSync3 {
 
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         if (!remoteHash.equals(lastRemoteHash)) {
-            log.info("Remote repository has changed, so pull and then re-scan");
-            localRootHash = pull(configDir);
-            log.info("New local hash={}", localRootHash);
+            log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
+            return ;
         }
 
         // walk the VFS and push hashes and blobs to the remote store. Anything
@@ -591,6 +592,7 @@ public class KSync3 {
     }
 
     private void checkout(File configDir, List<String> ignores) {
+        log.info("checkout {}", branchPath);
         String hash = getRemoteHash(branchPath);
         try {
             fetch(Path.root, hash, ignores); // fetch into local blobstore
@@ -600,7 +602,7 @@ public class KSync3 {
         }
         pull(hash, this.localDir, ignores); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
-
+        log.info("finished checkout");
     }
 
     /**
@@ -611,9 +613,13 @@ public class KSync3 {
      * @throws IOException
      */
     public String pull(File configDir) throws IOException {
-//        String localHash = commit(configDir);
+        String localHash = commit();
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         String remoteHash = getRemoteHash(branchPath);
+        if( lastRemoteHash != null && lastRemoteHash.equals(remoteHash)) {
+            log.info("No change on server since last pull");
+            return null;
+        }
         try {
             fetch(Path.root, remoteHash, null); // fetch into local blobstore
         } catch (InterruptedException ex) {
@@ -622,17 +628,20 @@ public class KSync3 {
         }
 
         DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore));
-        dg.generateDeltas(lastRemoteHash, remoteHash); // calc changes and apply them to the working directory
+        dg.generateDeltas(lastRemoteHash, remoteHash, localHash); // calc changes and apply them to the working directory
 
         log.info("Finished pull, save hash " + remoteHash);
         KSyncUtils.saveRemoteHash(configDir, remoteHash);
-        String newLocalHash = commit(configDir);
+        String newLocalHash = commit();
         return newLocalHash;
     }
 
     private String getRemoteHash(String path) {
         try {
             byte[] resp = client.get(path + "/?type=hash");
+            if (resp == null) {
+                return null;
+            }
             String s = new String(resp);
             return s;
         } catch (HttpException | NotAuthorizedException | BadRequestException | ConflictException | NotFoundException ex) {
@@ -660,18 +669,23 @@ public class KSync3 {
             log.error(errMsg, e);
             return;
         }
-        for (ITriplet t : triplets) {
-            if (!KSync3Utils.ignored(t.getName(), ignores)) {
-                if (t.getType().equals("d")) {
-                    _fetch(filePath.child(t.getName()), t.getHash(), ignores);
-                } else {
-                    combineToLocal(filePath.child(t.getName()), t.getHash());
+        if (triplets != null) {
+            for (ITriplet t : triplets) {
+                if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                    if (t.getType().equals("d")) {
+                        _fetch(filePath.child(t.getName()), t.getHash(), ignores);
+                    } else {
+                        combineToLocal(filePath.child(t.getName()), t.getHash());
+                    }
                 }
             }
         }
     }
 
     private List<ITriplet> getTriplets(String hash, BlobStore blobStore) {
+        if (hash == null || hash.equals("null")) {
+            return null;
+        }
         byte[] dir = blobStore.getBlob(hash);
         if (dir == null) {
             throw new RuntimeException("Could not find blob:" + hash);
@@ -686,6 +700,10 @@ public class KSync3 {
 
     private void pull(String hash, File dir, List<String> ignores) {
         log.info("pull: " + dir.getAbsolutePath());
+        if (hash == null) {
+            log.info("pull: hash is null, so nothing");
+            return;
+        }
         List<ITriplet> triplets;
         try {
             triplets = getTriplets(hash, localBlobStore);
@@ -695,27 +713,29 @@ public class KSync3 {
             log.warn(errMsg, e);
             return;
         }
-        for (ITriplet t : triplets) {
-            if (!KSync3Utils.ignored(t.getName(), ignores)) {
-                if (t.getType().equals("d")) {
-                    File dir2 = new File(dir, t.getName());
-                    dir2.mkdirs();
-                    pull(t.getHash(), dir2, ignores);
-                } else {
-                    Combiner c = new Combiner();
-                    File dest = new File(dir, t.getName());
-                    Fanout fileFanout = localHashStore.getFileFanout(t.getHash());
-                    if (fileFanout != null) {
-                        try (FileOutputStream fout = new FileOutputStream(dest)) {
-                            log.info("write local file: {}", dest.getAbsolutePath());
-                            c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
-                        } catch (IOException ex) {
-                            throw new RuntimeException(ex);
-                        }
+        if (triplets != null) {
+            for (ITriplet t : triplets) {
+                if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                    if (t.getType().equals("d")) {
+                        File dir2 = new File(dir, t.getName());
+                        dir2.mkdirs();
+                        pull(t.getHash(), dir2, ignores);
                     } else {
-                        String errMsg = "Could not get file fanout for hash " + t.getHash() + " in directory " + dir.getAbsolutePath();
-                        errors.add(errMsg);
-                        log.warn(errMsg);
+                        Combiner c = new Combiner();
+                        File dest = new File(dir, t.getName());
+                        Fanout fileFanout = localHashStore.getFileFanout(t.getHash());
+                        if (fileFanout != null) {
+                            try (FileOutputStream fout = new FileOutputStream(dest)) {
+                                log.info("write local file: {}", dest.getAbsolutePath());
+                                c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
+                            } catch (IOException ex) {
+                                throw new RuntimeException(ex);
+                            }
+                        } else {
+                            String errMsg = "Could not get file fanout for hash " + t.getHash() + " in directory " + dir.getAbsolutePath();
+                            errors.add(errMsg);
+                            log.warn(errMsg);
+                        }
                     }
                 }
             }
@@ -727,7 +747,7 @@ public class KSync3 {
     }
 
     private void push(File configDir) {
-        String hash = commit(configDir);
+        String hash = commit();
         try {
             push(hash, configDir);
         } catch (IOException ex) {
@@ -737,7 +757,7 @@ public class KSync3 {
         }
     }
 
-    private String commit(File configDir) {
+    private String commit() {
         String hash = tripletStore.scan();
         return hash;
     }

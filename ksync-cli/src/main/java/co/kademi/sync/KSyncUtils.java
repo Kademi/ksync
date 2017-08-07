@@ -10,7 +10,9 @@ import java.util.Properties;
 import java.util.Scanner;
 import java.util.function.Consumer;
 import net.sf.json.JSONArray;
+import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,26 +39,28 @@ public class KSyncUtils {
         }
     }
 
-    public static void withKSync(KSyncCommand c, Options options) {
+    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             Properties props = KSyncUtils.readProps(configDir);
             String url = props.getProperty("url");
             String user = props.getProperty("user");
 
-            Console con = System.console();
-            String pwd;
-            if (con != null) {
-                char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
-                pwd = new String(chars);
-            } else {
-                Scanner scanner = new Scanner(System.in);
-                System.out.println("Enter your password for " + user + "@" + url + ":");
-                pwd = scanner.next();
+            String pwd = line.getOptionValue("password");
+            if (StringUtils.isBlank(pwd)) {
+                Console con = System.console();
+                if (con != null) {
+                    char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
+                    pwd = new String(chars);
+                } else {
+                    Scanner scanner = new Scanner(System.in);
+                    System.out.println("Enter your password for " + user + "@" + url + ":");
+                    pwd = scanner.next();
+                }
             }
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync);
                 c.accept(configDir, kSync3);
             } catch (IOException ex) {
                 System.out.println("Ex: " + ex.getMessage());
@@ -106,8 +110,11 @@ public class KSyncUtils {
 
     public static String getLastRemoteHash(File repoDir) {
         Properties props = readProps(repoDir);
-        return props.getProperty("remoteHash");
-
+        String s = props.getProperty("remoteHash");
+        if (s.equals("null")) {
+            return null;
+        }
+        return s;
     }
 
     public static void processHashes(JSONArray arr, Consumer<String> c) {
@@ -116,6 +123,5 @@ public class KSyncUtils {
             c.accept(hash);
         }
     }
-
 
 }

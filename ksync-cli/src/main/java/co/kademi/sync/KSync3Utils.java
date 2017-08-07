@@ -36,7 +36,7 @@ public class KSync3Utils {
                 return s;
             }
         }
-        
+
         String s = line.getOptionValue(optionName);
         if (StringUtils.isBlank(s)) {
             Option opt = options.getOption(optionName);
@@ -78,7 +78,7 @@ public class KSync3Utils {
             String pwd = getPassword(line, user, url);
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, true);
                 c.accept(configDir, kSync3);
             } catch (IOException ex) {
                 System.out.println("Ex: " + ex.getMessage());
