@@ -301,7 +301,7 @@ public class KSync3 {
 
     }
 
-    private static void pull(Options options,CommandLine line) {
+    private static void pull(Options options, CommandLine line) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
@@ -418,7 +418,7 @@ public class KSync3 {
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         if (!remoteHash.equals(lastRemoteHash)) {
             log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
-            return ;
+            return;
         }
 
         // walk the VFS and push hashes and blobs to the remote store. Anything
@@ -616,7 +616,7 @@ public class KSync3 {
         String localHash = commit();
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         String remoteHash = getRemoteHash(branchPath);
-        if( lastRemoteHash != null && lastRemoteHash.equals(remoteHash)) {
+        if (lastRemoteHash != null && lastRemoteHash.equals(remoteHash)) {
             log.info("No change on server since last pull");
             return null;
         }
