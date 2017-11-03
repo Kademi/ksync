@@ -353,7 +353,7 @@ public class KSync3 {
         try {
             blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
         } catch (Exception e) {
-            log.warn("Unable to load blobs bloom filter, so things will be a bit slow");
+            log.warn("Unable to load blobs bloom filter, so things will be a bit slow: " + e.getMessage());
         }
 
         HttpBloomFilterHashCache chunckFanoutHashCache = null;
@@ -392,7 +392,7 @@ public class KSync3 {
                     log.error("Exception in file changed event handler", ex);
                 }
             }
-        }, null, configDir);
+        }, null, configDir, null);
 
     }
 
