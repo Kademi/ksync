@@ -6,6 +6,8 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.function.Consumer;
@@ -45,6 +47,9 @@ public class KSyncUtils {
             Properties props = KSyncUtils.readProps(configDir);
             String url = props.getProperty("url");
             String user = props.getProperty("user");
+            String sIgnore = props.getProperty("ignore");
+            List<String> ignores = split(sIgnore);
+
 
             String pwd = line.getOptionValue("password");
             if (StringUtils.isBlank(pwd)) {
@@ -60,12 +65,22 @@ public class KSyncUtils {
             }
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync, ignores);
                 c.accept(configDir, kSync3);
             } catch (IOException ex) {
                 System.out.println("Ex: " + ex.getMessage());
             }
         }, options);
+    }
+
+    private static List<String> split(String sIgnore) {
+        List<String> list = new ArrayList<>();
+        if( StringUtils.isNotBlank(sIgnore)) {
+            for( String s : sIgnore.split(",")) {
+                list.add(s.trim());
+            }
+        }
+        return list;
     }
 
     public interface KSyncCommand {

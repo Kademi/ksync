@@ -68,23 +68,6 @@ public class KSync3Utils {
         return s;
     }
 
-    public static void withKSync(KSyncUtils.KSyncCommand c, Options options, CommandLine line) {
-        KSyncUtils.withDir((File dir) -> {
-            File configDir = new File(dir, ".ksync");
-            Properties props = KSyncUtils.readProps(configDir);
-            String url = getInput(options, line, "url", props);
-            String user = getInput(options, line, "user", props);
-
-            String pwd = getPassword(line, user, url);
-
-            try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, true);
-                c.accept(configDir, kSync3);
-            } catch (IOException ex) {
-                System.out.println("Ex: " + ex.getMessage());
-            }
-        }, options);
-    }
 
     public static File getRootDir(CommandLine line) {
         String s = line.getOptionValue("rootdir");

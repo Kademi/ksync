@@ -259,7 +259,7 @@ public class KSync3 {
             KSyncUtils.writeProps(url, user, repoDir);
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores);
                 kSync3.checkout(repoDir, ignores);
                 kSync3.showErrors();
             } catch (IOException ex) {
@@ -336,7 +336,7 @@ public class KSync3 {
 
     private final List<String> errors = new ArrayList<>();
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores) throws MalformedURLException, IOException {
         this.localDir = localDir;
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
@@ -392,7 +392,7 @@ public class KSync3 {
                     log.error("Exception in file changed event handler", ex);
                 }
             }
-        }, null, configDir, null);
+        }, null, configDir, null, ignores);
 
     }
 

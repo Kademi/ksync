@@ -340,7 +340,7 @@ public class AppDeployer {
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
                 }
-            }, null, null, null);
+            }, null, null, null, null);
             return s.scan();
         } catch (Exception ex) {
             log.error("Exception upsyncing " + appName, ex);
@@ -460,7 +460,7 @@ public class AppDeployer {
                     return false;
                 } else {
                     throw new RuntimeException("Couldnt create version " + versionPath);
-                }                
+                }
             }
         } else {
             log.info("Version already exists app={} version={}", appName, versionName);
@@ -695,7 +695,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, null, null);
+            }, null, null, null,null);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);
