@@ -392,7 +392,7 @@ public class KSync3 {
                     log.error("Exception in file changed event handler", ex);
                 }
             }
-        }, null, configDir, null);
+        }, null, configDir, null, null);
 
     }
 

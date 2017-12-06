@@ -173,8 +173,8 @@ public class AppDeployer {
 
     public void upsync() throws IOException {
         upSyncMarketplaceDir(new File(rootDir, "themes"), true, false);
-        upSyncMarketplaceDir(new File(rootDir, "apps"), false, false);
-        upSyncMarketplaceDir(new File(rootDir, "libs"), false, true);
+        upSyncMarketplaceDir(new File(rootDir, "apps"), false, true);
+        upSyncMarketplaceDir(new File(rootDir, "libs"), false, false);
 
         System.out.println("");
         System.out.println("");
@@ -340,7 +340,7 @@ public class AppDeployer {
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
                 }
-            }, null, null, null);
+            }, null, null, null, null);
             return s.scan();
         } catch (Exception ex) {
             log.error("Exception upsyncing " + appName, ex);
@@ -695,7 +695,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, null, null);
+            }, null, null, null, null);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);
