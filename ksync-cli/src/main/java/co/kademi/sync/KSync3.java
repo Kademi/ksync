@@ -341,6 +341,8 @@ public class KSync3 {
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
         client = new Host(url.getHost(), url.getPort(), user, pwd, null);
+        boolean secure = url.getProtocol().equals("https");
+        client.setSecure(secure);
         client.setTimeout(30000);
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
