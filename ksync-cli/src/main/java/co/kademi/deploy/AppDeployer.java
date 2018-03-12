@@ -19,6 +19,7 @@ import io.milton.sync.HttpBloomFilterHashCache;
 import io.milton.sync.HttpHashStore;
 import io.milton.sync.MinimalPutsBlobStore;
 import io.milton.sync.MinimalPutsHashStore;
+import io.milton.sync.triplets.FileSystemWatchingService;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
 import java.io.File;
 import java.io.IOException;
@@ -27,10 +28,14 @@ import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.UnknownHostException;
+import java.nio.file.FileSystems;
+import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -145,6 +150,8 @@ public class AppDeployer {
     private boolean autoIncrement = false; // if true, update version numbers in files
     private boolean report; // if true, dont make any changes
     private boolean force;
+    private final ScheduledExecutorService scheduledExecutorService;
+    private final FileSystemWatchingService fileSystemWatchingService;
 
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds) throws MalformedURLException {
         this.rootDir = dir;
@@ -161,6 +168,20 @@ public class AppDeployer {
 
         localBlobStore = new FileSystem2BlobStore(new File(localDataDir, "blobs"));
         localHashStore = new FileSystem2HashStore(new File(localDataDir, "hash"));
+
+        scheduledExecutorService = Executors.newScheduledThreadPool(1);
+        final java.nio.file.Path path = FileSystems.getDefault().getPath(rootDir.getAbsolutePath());
+        WatchService watchService = null;
+        try {
+            watchService = path.getFileSystem().newWatchService();
+        } catch (IOException ex) {
+            log.error("Exception initialising watch service");
+        }
+        if (watchService != null) {
+            fileSystemWatchingService = new FileSystemWatchingService(watchService, scheduledExecutorService);
+        } else {
+            fileSystemWatchingService = null;
+        }
     }
 
     public boolean isAutoIncrement() {
@@ -695,7 +716,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, null, null,null);
+            }, null, null, fileSystemWatchingService, null);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);
