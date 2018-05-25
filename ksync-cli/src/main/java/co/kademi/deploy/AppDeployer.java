@@ -362,7 +362,12 @@ public class AppDeployer {
                     log.error("Exception in file changed event handler", ex);
                 }
             }, null, null, null, null);
-            return s.scan();
+            String result = s.scan();
+
+            log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
+            log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
+
+            return result;
         } catch (Exception ex) {
             log.error("Exception upsyncing " + appName, ex);
             return null;
@@ -707,6 +712,13 @@ public class AppDeployer {
             HttpBloomFilterHashCache blobsHashCache = null;
             HttpBloomFilterHashCache chunckFanoutHashCache = null;
             HttpBloomFilterHashCache fileFanoutHashCache = null;
+
+            String branchPath = "/repositories/" + appName + "/" + versionName + "/";
+            if (!report) {
+                blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
+                chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
+                fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
+            }
 
             httpBlobStore = new HttpBlobStore(client, blobsHashCache);
             httpBlobStore.setBaseUrl("/_hashes/blobs/");
