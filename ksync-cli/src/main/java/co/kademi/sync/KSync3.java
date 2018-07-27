@@ -563,7 +563,7 @@ public class KSync3 {
                         destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                         c.down();
                         transferQueueCounter.down();
-                        log.info("Finidh transfer chunk hash={} ", filePath);
+                        log.info("Finish transfer chunk hash={} ", filePath);
                     });
 
                 }
