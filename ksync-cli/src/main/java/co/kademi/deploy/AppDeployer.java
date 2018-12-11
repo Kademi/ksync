@@ -19,6 +19,8 @@ import io.milton.sync.HttpBloomFilterHashCache;
 import io.milton.sync.HttpHashStore;
 import io.milton.sync.MinimalPutsBlobStore;
 import io.milton.sync.MinimalPutsHashStore;
+import io.milton.sync.triplets.BlockingBlobStore;
+import io.milton.sync.triplets.BlockingHashStore;
 import io.milton.sync.triplets.FileSystemWatchingService;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
 import java.io.File;
@@ -34,8 +36,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -366,6 +372,11 @@ public class AppDeployer {
 
             log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
             log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
+
+            if( blobStore instanceof BlockingBlobStore ) {
+                BlockingBlobStore bbs = (BlockingBlobStore) blobStore;
+                bbs.checkComplete();
+            }
 
             return result;
         } catch (Exception ex) {
@@ -736,7 +747,12 @@ public class AppDeployer {
         }
     }
 
-    public class AppDeployerBlobStore implements BlobStore {
+    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
+    private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+    private final Counter transferQueueCounter = new Counter();
+
+    public class AppDeployerBlobStore implements BlockingBlobStore {
 
         private final BlobStore local;
         private final BlobStore remote;
@@ -748,8 +764,22 @@ public class AppDeployer {
 
         @Override
         public void setBlob(String hash, byte[] bytes) {
-            local.setBlob(hash, bytes);
-            remote.setBlob(hash, bytes);
+            if( !local.hasBlob(hash)) {
+                local.setBlob(hash, bytes);
+            }
+            //remote.setBlob(hash, bytes);
+
+            transferQueueCounter.up();
+            transferExecutor.submit(() -> {
+                log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count);
+                long tm = System.currentTimeMillis();
+                //System.out.println("upload " + dirHash);
+                remote.setBlob(hash, bytes);
+                transferQueueCounter.down();
+                //System.out.println("done upload " + dirHash);
+                tm = System.currentTimeMillis() - tm;
+                log.info("Transferred blob in {} ms", tm);
+            });
         }
 
         @Override
@@ -765,9 +795,18 @@ public class AppDeployer {
         public boolean hasBlob(String hash) {
             return remote.hasBlob(hash);
         }
+
+        @Override
+        public void checkComplete() throws InterruptedException {
+            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
+            while (transferQueueCounter.count > 0) {
+                log.info("..waiting for transfers to complete. remaining={}", transferQueueCounter.count);
+                Thread.sleep(1000);
+            }
+        }
     }
 
-    public class AppDeployerHashStore implements HashStore {
+    public class AppDeployerHashStore implements BlockingHashStore {
 
         private final HashStore local;
         private final HashStore remote;
@@ -779,15 +818,42 @@ public class AppDeployer {
 
         @Override
         public void setChunkFanout(String hash, List<String> blobHashes, long actualContentLength) {
-            local.setChunkFanout(hash, blobHashes, actualContentLength);
-            remote.setChunkFanout(hash, blobHashes, actualContentLength);
+            if( !local.hasChunk(hash)) {
+                local.setChunkFanout(hash, blobHashes, actualContentLength);
+            }
+            transferQueueCounter.up();
+            transferExecutor.submit(() -> {
+                log.info("setChunkFanout: enqueued transfer. Count={}", transferQueueCounter.count);
+                long tm = System.currentTimeMillis();
+                //System.out.println("upload " + dirHash);
+                remote.setChunkFanout(hash, blobHashes, actualContentLength);
+                transferQueueCounter.down();
+                //System.out.println("done upload " + dirHash);
+                tm = System.currentTimeMillis() - tm;
+                log.info("Transferred chunk in {} ms", tm);
+            });
+
         }
 
         @Override
         public void setFileFanout(String hash, List<String> fanoutHashes, long actualContentLength) {
             //log.info("setFileFanout {}", hash);
-            local.setFileFanout(hash, fanoutHashes, actualContentLength);
-            remote.setFileFanout(hash, fanoutHashes, actualContentLength);
+            if( !local.hasFile(hash)) {
+                local.setFileFanout(hash, fanoutHashes, actualContentLength);
+            }
+            //remote.setFileFanout(hash, fanoutHashes, actualContentLength);
+            transferQueueCounter.up();
+            transferExecutor.submit(() -> {
+                log.info("setFileFanout: enqueued transfer. Count={}", transferQueueCounter.count);
+                long tm = System.currentTimeMillis();
+                //System.out.println("upload " + dirHash);
+                remote.setFileFanout(hash, fanoutHashes, actualContentLength);
+                transferQueueCounter.down();
+                //System.out.println("done upload " + dirHash);
+                tm = System.currentTimeMillis() - tm;
+                log.info("Transferred file fanout in {} ms", tm);
+            });
+
         }
 
         @Override
@@ -812,5 +878,26 @@ public class AppDeployer {
             return remote.hasFile(fileHash);
         }
 
+        @Override
+        public void checkComplete() throws InterruptedException {
+            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
+            while (transferQueueCounter.count > 0) {
+                log.info("..waiting for transfers to complete. remaining={}", transferQueueCounter.count);
+                Thread.sleep(1000);
+            }
+        }
+    }
+
+    private class Counter {
+
+        private int count;
+
+        synchronized void up() {
+            count++;
+        }
+
+        synchronized void down() {
+            count--;
+        }
     }
 }
