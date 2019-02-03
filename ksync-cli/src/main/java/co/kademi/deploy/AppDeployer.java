@@ -221,19 +221,25 @@ public class AppDeployer {
             log.warn("No child dirs in " + dir.getAbsolutePath());
             return;
         }
+
+        // Note that by providing a watchservice, MemoryLocalTripletStore will not create a watcher.
+        final java.nio.file.Path path = FileSystems.getDefault().getPath(dir.getAbsolutePath());
+        WatchService watchService = path.getFileSystem().newWatchService();
+        FileSystemWatchingService fileWatchService = new FileSystemWatchingService(watchService, scheduledExecutorService);
+
         for (File appDir : dir.listFiles()) {
             if (appDir.isDirectory()) {
                 String appName = appDir.getName();
 
                 if (isProcess(appDir)) {
-                    String result = processAppDir(appName, isTheme, isApp, appDir);
+                    String result = processAppDir(appName, isTheme, isApp, appDir, fileWatchService);
                     results.add(result);
                 }
             }
         }
     }
 
-    private String processAppDir(String appName, boolean isTheme, boolean isApp, File appDir) throws RuntimeException {
+    private String processAppDir(String appName, boolean isTheme, boolean isApp, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
         log.info("checkCreateApp {} {}", appName);
         String appPath = "/manageApps/" + appName;
         boolean appCreated = false;
@@ -281,7 +287,7 @@ public class AppDeployer {
             }
         }
 
-        String localHash = upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir);
+        String localHash = upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir, fileWatchService);
         if (localHash != null) {
 
             if (appCreated) {
@@ -321,7 +327,7 @@ public class AppDeployer {
 
     }
 
-    private String upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir) {
+    private String upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir, FileSystemWatchingService fileWatchService) {
         log.info("upSyncMarketplaceVersionDir app={}", appName);
         try {
             if (!checkCreateAppVersion(appName, versionName, theme, app)) {
@@ -367,13 +373,13 @@ public class AppDeployer {
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
                 }
-            }, null, null, null, null);
+            }, null, null, fileWatchService, null);
             String result = s.scan();
 
             log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
             log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
 
-            if( blobStore instanceof BlockingBlobStore ) {
+            if (blobStore instanceof BlockingBlobStore) {
                 BlockingBlobStore bbs = (BlockingBlobStore) blobStore;
                 bbs.checkComplete();
             }
@@ -764,7 +770,7 @@ public class AppDeployer {
 
         @Override
         public void setBlob(String hash, byte[] bytes) {
-            if( !local.hasBlob(hash)) {
+            if (!local.hasBlob(hash)) {
                 local.setBlob(hash, bytes);
             }
             //remote.setBlob(hash, bytes);
@@ -818,7 +824,7 @@ public class AppDeployer {
 
         @Override
         public void setChunkFanout(String hash, List<String> blobHashes, long actualContentLength) {
-            if( !local.hasChunk(hash)) {
+            if (!local.hasChunk(hash)) {
                 local.setChunkFanout(hash, blobHashes, actualContentLength);
             }
             transferQueueCounter.up();
@@ -838,7 +844,7 @@ public class AppDeployer {
         @Override
         public void setFileFanout(String hash, List<String> fanoutHashes, long actualContentLength) {
             //log.info("setFileFanout {}", hash);
-            if( !local.hasFile(hash)) {
+            if (!local.hasFile(hash)) {
                 local.setFileFanout(hash, fanoutHashes, actualContentLength);
             }
             //remote.setFileFanout(hash, fanoutHashes, actualContentLength);
