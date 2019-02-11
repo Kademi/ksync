@@ -163,8 +163,9 @@ public class AppDeployer {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
-        client = new Host(url.getHost(), url.getPort(), user, password, null);
-        client.setTimeout(30000);
+        int timeout = 30000;
+        //client = new Host(url.getHost(), url.getPort(), user, password, null);
+        client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
         client.setUseDigestForPreemptiveAuth(false);
         this.appIds = KSync3Utils.split(sAppIds);
 
