@@ -842,6 +842,7 @@ public class AppDeployer {
                 transferQueueCounter.up();
 
                 Set<BlobImpl> blobss = blobs;
+                log.info("doBulkUpload: upload {} blobs", blobss.size());
 
                 transferExecutor.submit(() -> {
                     byte[] blobsZip;
