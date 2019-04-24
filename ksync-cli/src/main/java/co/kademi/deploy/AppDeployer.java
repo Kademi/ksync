@@ -564,8 +564,10 @@ public class AppDeployer {
         }
         try {
             Path p = Path.path(appBasPath);
-            List<PropFindResponse> list = client.propFind(p, 1, RespUtils.davName("name"), RespUtils.davName("resourcetype"), RespUtils.davName("iscollection"));
+            String appPath = p + "/";
+            List<PropFindResponse> list = client.propFind(appPath, 1, RespUtils.davName("name"), RespUtils.davName("resourcetype"), RespUtils.davName("iscollection"));
             List<String> versions = new ArrayList<>();
+            log.info("createVersion: looking for highest version, found {} child resources", list.size());
             for (PropFindResponse l : list) {
                 if (l.isCollection()) {
                     String name = l.getName();
@@ -576,6 +578,7 @@ public class AppDeployer {
             }
             String highestVersion;
             if (versions.isEmpty()) {
+                log.info("createVersion: no existing versions, use default 'version1', tried propfind path {}", appPath);
                 highestVersion = "version1";
             } else {
                 versions.sort(ComparatorUtils.NATURAL_COMPARATOR);
