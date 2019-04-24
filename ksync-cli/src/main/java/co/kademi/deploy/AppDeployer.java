@@ -167,6 +167,8 @@ public class AppDeployer {
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
         client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
         client.setUseDigestForPreemptiveAuth(false);
+        boolean secure = url.getProtocol().equals("https");
+        client.setSecure(secure);
         this.appIds = KSync3Utils.split(sAppIds);
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
