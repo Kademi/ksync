@@ -12,6 +12,7 @@ import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
 import io.milton.httpclient.Host;
 import io.milton.httpclient.HttpException;
+import io.milton.httpclient.HttpResult;
 import io.milton.httpclient.PropFindResponse;
 import io.milton.httpclient.RespUtils;
 import io.milton.sync.HttpBlobStore;
@@ -34,14 +35,18 @@ import java.nio.file.FileSystems;
 import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -49,6 +54,7 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.collections.ComparatorUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.hashsplit4j.api.BlobImpl;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Fanout;
 import org.hashsplit4j.api.HashStore;
@@ -167,6 +173,8 @@ public class AppDeployer {
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
         client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
         client.setUseDigestForPreemptiveAuth(false);
+        boolean secure = url.getProtocol().equals("https");
+        client.setSecure(secure);
         this.appIds = KSync3Utils.split(sAppIds);
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
@@ -362,7 +370,7 @@ public class AppDeployer {
                 blobStore = localBlobStore;
                 hashStore = localHashStore;
             } else {
-                blobStore = new AppDeployerBlobStore(localBlobStore, mpBlobStore);
+                blobStore = new AppDeployerBlobStore(client, localBlobStore, mpBlobStore, true);
                 hashStore = new AppDeployerHashStore(localHashStore, mpHashStore);
             }
 
@@ -379,6 +387,11 @@ public class AppDeployer {
 
             log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
             log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
+
+            if (blobStore instanceof AppDeployerBlobStore) {
+                AppDeployerBlobStore adbs = (AppDeployerBlobStore) blobStore;
+                adbs.doBulkUpload();
+            }
 
             if (blobStore instanceof BlockingBlobStore) {
                 BlockingBlobStore bbs = (BlockingBlobStore) blobStore;
@@ -764,12 +777,17 @@ public class AppDeployer {
 
     public class AppDeployerBlobStore implements BlockingBlobStore {
 
+        private final Host host;
         private final BlobStore local;
         private final BlobStore remote;
+        private final boolean bulkUpload;
+        private final Set<BlobImpl> blobs = new LinkedHashSet<>();
 
-        public AppDeployerBlobStore(BlobStore local, BlobStore remote) {
+        public AppDeployerBlobStore(Host host, BlobStore local, BlobStore remote, boolean bulkUpload) {
+            this.host = host;
             this.local = local;
             this.remote = remote;
+            this.bulkUpload = bulkUpload;
         }
 
         @Override
@@ -779,17 +797,21 @@ public class AppDeployer {
             }
             //remote.setBlob(hash, bytes);
 
-            transferQueueCounter.up();
-            transferExecutor.submit(() -> {
-                log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count);
-                long tm = System.currentTimeMillis();
-                //System.out.println("upload " + dirHash);
-                remote.setBlob(hash, bytes);
-                transferQueueCounter.down();
-                //System.out.println("done upload " + dirHash);
-                tm = System.currentTimeMillis() - tm;
-                log.info("Transferred blob in {} ms", tm);
-            });
+            if (bulkUpload) {
+                blobs.add(new BlobImpl(hash, bytes));
+            } else {
+                transferQueueCounter.up();
+                transferExecutor.submit(() -> {
+                    log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count);
+                    long tm = System.currentTimeMillis();
+                    //System.out.println("upload " + dirHash);
+                    remote.setBlob(hash, bytes);
+                    transferQueueCounter.down();
+                    //System.out.println("done upload " + dirHash);
+                    tm = System.currentTimeMillis() - tm;
+                    log.info("Transferred blob in {} ms", tm);
+                });
+            }
         }
 
         @Override
@@ -810,8 +832,42 @@ public class AppDeployer {
         public void checkComplete() throws InterruptedException {
             log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
             while (transferQueueCounter.count > 0) {
-                log.info("..waiting for transfers to complete. remaining={}", transferQueueCounter.count);
+                log.info("..waiting for transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count);
                 Thread.sleep(1000);
+            }
+        }
+
+        public void doBulkUpload() throws IOException {
+            if (bulkUpload && !blobs.isEmpty()) {
+                transferQueueCounter.up();
+
+                Set<BlobImpl> blobss = blobs;
+
+                transferExecutor.submit(() -> {
+                    byte[] blobsZip;
+                    try {
+                        blobsZip = AppDeployerUtils.compressBulkBlobs(blobss);
+                    } catch (IOException ex) {
+                        transferQueueCounter.down();
+
+                        throw new RuntimeException(ex);
+                    }
+
+                    Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
+                    HttpResult result;
+                    try {
+                        result = host.doPut(destPath, blobsZip, "application/zip");
+                    } catch (Exception e) {
+                        transferQueueCounter.down();
+                        throw new RuntimeException("Error uploading zip - " + e.getMessage(), e);
+                    }
+
+                    transferQueueCounter.down();
+
+                    if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
+                        throw new RuntimeException("Failed to upload - " + result.getStatusCode());
+                    }
+                });
             }
         }
     }

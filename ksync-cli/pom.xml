@@ -25,7 +25,7 @@
         <dependency>
             <groupId>io.milton</groupId>
             <artifactId>milton-cloud-sync</artifactId>
-            <version>1.4.3</version>
+            <version>1.4.4</version>
             <exclusions>
                 <exclusion>
                     <groupId>voldermort</groupId>
