@@ -888,6 +888,10 @@ public class AppDeployer {
             if (!local.hasChunk(hash)) {
                 local.setChunkFanout(hash, blobHashes, actualContentLength);
             }
+            if( remote.hasChunk(hash)) {
+                log.info("setChunkFanout: remote bloom filter says probably already has this chunk");
+                return ;
+            }
             transferQueueCounter.up();
             transferExecutor.submit(() -> {
                 log.info("setChunkFanout: enqueued transfer. Count={}", transferQueueCounter.count);
