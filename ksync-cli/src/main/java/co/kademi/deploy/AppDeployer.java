@@ -35,18 +35,18 @@ import java.nio.file.FileSystems;
 import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -371,7 +371,7 @@ public class AppDeployer {
                 hashStore = localHashStore;
             } else {
                 blobStore = new AppDeployerBlobStore(client, localBlobStore, mpBlobStore, true);
-                hashStore = new AppDeployerHashStore(localHashStore, mpHashStore);
+                hashStore = new AppDeployerHashStore(client, localHashStore, mpHashStore);
             }
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
@@ -387,11 +387,6 @@ public class AppDeployer {
 
             log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
             log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
-
-            if (blobStore instanceof AppDeployerBlobStore) {
-                AppDeployerBlobStore adbs = (AppDeployerBlobStore) blobStore;
-                adbs.doBulkUpload();
-            }
 
             if (blobStore instanceof BlockingBlobStore) {
                 BlockingBlobStore bbs = (BlockingBlobStore) blobStore;
@@ -781,13 +776,33 @@ public class AppDeployer {
         private final BlobStore local;
         private final BlobStore remote;
         private final boolean bulkUpload;
-        private final Set<BlobImpl> blobs = new LinkedHashSet<>();
+        private final BlockingQueue<BlobImpl> blobs = new ArrayBlockingQueue<>(1000);
+
+        private boolean running = true;
+        private Exception transferException;
 
         public AppDeployerBlobStore(Host host, BlobStore local, BlobStore remote, boolean bulkUpload) {
             this.host = host;
             this.local = local;
             this.remote = remote;
             this.bulkUpload = bulkUpload;
+
+            transferExecutor.submit(() -> {
+                try {
+                    while (running) {
+                        Set<BlobImpl> toUpload = new HashSet<>();
+                        this.blobs.drainTo(toUpload, 100);
+                        if (!toUpload.isEmpty()) {
+                            doBulkUpload(toUpload);
+                        } else {
+                            Thread.sleep(300);
+                        }
+                    }
+                    log.info("AppDeployerBlobStore: transfer process finished");
+                } catch (Exception ex) {
+                    this.transferException = ex;
+                }
+            });
         }
 
         @Override
@@ -798,7 +813,11 @@ public class AppDeployer {
             //remote.setBlob(hash, bytes);
 
             if (bulkUpload) {
-                blobs.add(new BlobImpl(hash, bytes));
+                try {
+                    blobs.put(new BlobImpl(hash, bytes));
+                } catch (InterruptedException ex) {
+                    throw new RuntimeException(ex);
+                }
             } else {
                 transferQueueCounter.up();
                 transferExecutor.submit(() -> {
@@ -830,6 +849,9 @@ public class AppDeployer {
 
         @Override
         public void checkComplete() throws InterruptedException {
+            if (transferException != null) {
+                throw new RuntimeException("Exception occured uploading blobs", transferException);
+            }
             log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
             while (transferQueueCounter.count > 0) {
                 log.info("..waiting for transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count);
@@ -837,50 +859,84 @@ public class AppDeployer {
             }
         }
 
-        public void doBulkUpload() throws IOException {
-            if (bulkUpload && !blobs.isEmpty()) {
-                transferQueueCounter.up();
+        public void doBulkUpload(Set<BlobImpl> blobss) throws IOException {
+            log.info("doBulkUpload: upload {} blobs", blobss.size());
 
-                Set<BlobImpl> blobss = blobs;
-                log.info("doBulkUpload: upload {} blobs", blobss.size());
-
-                transferExecutor.submit(() -> {
-                    byte[] blobsZip;
-                    try {
-                        blobsZip = AppDeployerUtils.compressBulkBlobs(blobss);
-                    } catch (IOException ex) {
-                        transferQueueCounter.down();
-
-                        throw new RuntimeException(ex);
-                    }
-
-                    Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
-                    HttpResult result;
-                    try {
-                        result = host.doPut(destPath, blobsZip, "application/zip");
-                    } catch (Exception e) {
-                        transferQueueCounter.down();
-                        throw new RuntimeException("Error uploading zip - " + e.getMessage(), e);
-                    }
-
+            transferExecutor.submit(() -> {
+                byte[] blobsZip;
+                try {
+                    blobsZip = AppDeployerUtils.compressBulkBlobs(blobss);
+                } catch (IOException ex) {
                     transferQueueCounter.down();
 
-                    if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
-                        throw new RuntimeException("Failed to upload - " + result.getStatusCode());
-                    }
-                });
-            }
+                    throw new RuntimeException(ex);
+                }
+
+                Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
+                HttpResult result;
+                try {
+                    result = host.doPut(destPath, blobsZip, "application/zip");
+                } catch (Exception e) {
+                    transferQueueCounter.down();
+                    throw new RuntimeException("Error uploading zip - " + e.getMessage(), e);
+                }
+
+                transferQueueCounter.down();
+
+                if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
+                    throw new RuntimeException("Failed to upload - " + result.getStatusCode());
+                }
+            });
         }
     }
+    
+    public static class FanoutBean {
+        String hash;
+        List<String> blobHashes;
+        long actualContentLength;
+
+        public FanoutBean(String hash, List<String> blobHashes, long actualContentLength) {
+            this.hash = hash;
+            this.blobHashes = blobHashes;
+            this.actualContentLength = actualContentLength;
+        }                
+    }
+    
+
 
     public class AppDeployerHashStore implements BlockingHashStore {
 
+        private final Host host;
         private final HashStore local;
         private final HashStore remote;
+        
+        private final BlockingQueue<FanoutBean> chunkBeans = new ArrayBlockingQueue<>(1000);
+        private final BlockingQueue<FanoutBean> fileBeans = new ArrayBlockingQueue<>(1000);
 
-        public AppDeployerHashStore(HashStore local, HashStore remote) {
+        private boolean running = true;
+        private Exception transferException;        
+
+        public AppDeployerHashStore(Host host, HashStore local, HashStore remote) {
+            this.host = host;
             this.local = local;
             this.remote = remote;
+            
+            transferExecutor.submit(() -> {
+                try {
+                    while (running) {
+                        Set<FanoutBean> toUpload = new HashSet<>();
+                        this.chunkBeans.drainTo(toUpload, 100);
+                        if (!toUpload.isEmpty()) {
+                            doBulkChunkUpload(toUpload);
+                        } else {
+                            Thread.sleep(300);
+                        }
+                    }
+                    log.info("AppDeployerBlobStore: transfer process finished");
+                } catch (Exception ex) {
+                    this.transferException = ex;
+                }
+            });            
         }
 
         @Override
@@ -888,22 +944,12 @@ public class AppDeployer {
             if (!local.hasChunk(hash)) {
                 local.setChunkFanout(hash, blobHashes, actualContentLength);
             }
-            if( remote.hasChunk(hash)) {
+            if (remote.hasChunk(hash)) {
                 log.info("setChunkFanout: remote bloom filter says probably already has this chunk");
-                return ;
+                return;
             }
-            transferQueueCounter.up();
-            transferExecutor.submit(() -> {
-                log.info("setChunkFanout: enqueued transfer. Count={}", transferQueueCounter.count);
-                long tm = System.currentTimeMillis();
-                //System.out.println("upload " + dirHash);
-                remote.setChunkFanout(hash, blobHashes, actualContentLength);
-                transferQueueCounter.down();
-                //System.out.println("done upload " + dirHash);
-                tm = System.currentTimeMillis() - tm;
-                log.info("Transferred chunk in {} ms", tm);
-            });
-
+            
+            chunkBeans.add(new FanoutBean(hash, blobHashes, actualContentLength));
         }
 
         @Override
@@ -912,18 +958,7 @@ public class AppDeployer {
             if (!local.hasFile(hash)) {
                 local.setFileFanout(hash, fanoutHashes, actualContentLength);
             }
-            //remote.setFileFanout(hash, fanoutHashes, actualContentLength);
-            transferQueueCounter.up();
-            transferExecutor.submit(() -> {
-                log.info("setFileFanout: enqueued transfer. Count={}", transferQueueCounter.count);
-                long tm = System.currentTimeMillis();
-                //System.out.println("upload " + dirHash);
-                remote.setFileFanout(hash, fanoutHashes, actualContentLength);
-                transferQueueCounter.down();
-                //System.out.println("done upload " + dirHash);
-                tm = System.currentTimeMillis() - tm;
-                log.info("Transferred file fanout in {} ms", tm);
-            });
+            fileBeans.add(new FanoutBean(hash, fanoutHashes, actualContentLength));
 
         }
 
@@ -948,6 +983,66 @@ public class AppDeployer {
             //log.info("hasFile {}", fileHash);
             return remote.hasFile(fileHash);
         }
+        
+        public void doBulkChunkUpload(Set<FanoutBean> toUpload) throws IOException {
+            log.info("doBulkUpload: upload {} blobs", toUpload.size());
+
+            transferExecutor.submit(() -> {
+                byte[] chunksZip;
+                try {
+                    chunksZip = AppDeployerUtils.compressBulkChunkFanouts(toUpload);
+                } catch (Exception ex) {
+                    transferQueueCounter.down();
+
+                    throw new RuntimeException(ex);
+                }
+
+                Path destPath = Path.path("/_hashes/chunkFanouts/").child("bulkChunks.zip");
+                HttpResult result;
+                try {
+                    result = host.doPut(destPath, chunksZip, "application/zip");
+                } catch (Exception e) {
+                    transferQueueCounter.down();
+                    throw new RuntimeException("Error uploading zip - " + e.getMessage(), e);
+                }
+
+                transferQueueCounter.down();
+
+                if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
+                    throw new RuntimeException("Failed to upload - " + result.getStatusCode());
+                }
+            });
+        }        
+        
+        public void doBulkFileUpload(Set<FanoutBean> toUpload) throws IOException {
+            log.info("doBulkUpload: upload {} file chunks", toUpload.size());
+
+            transferExecutor.submit(() -> {
+                byte[] filesZip;
+                try {
+                    filesZip = AppDeployerUtils.compressBulkFileFanouts(toUpload);
+                } catch (Exception ex) {
+                    transferQueueCounter.down();
+
+                    throw new RuntimeException(ex);
+                }
+
+                Path destPath = Path.path("/_hashes/fileFanouts/").child("bulkFiles.zip");
+                HttpResult result;
+                try {
+                    result = host.doPut(destPath, filesZip, "application/zip");
+                } catch (Exception e) {
+                    transferQueueCounter.down();
+                    throw new RuntimeException("Error uploading zip - " + e.getMessage(), e);
+                }
+
+                transferQueueCounter.down();
+
+                if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
+                    throw new RuntimeException("Failed to upload - " + result.getStatusCode());
+                }
+            });
+        }          
 
         @Override
         public void checkComplete() throws InterruptedException {

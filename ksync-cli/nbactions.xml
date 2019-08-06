@@ -12,7 +12,7 @@
             <properties>
                 <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command publish -user kademibrad -force</exec.args>
                 <exec.executable>java</exec.executable>
-                <exec.workingdir>/home/brad/proj/kademi-dev/src/main/marketplace</exec.workingdir>
+                <exec.workingdir>/home/brad/kademi-dev/src/main/marketplace</exec.workingdir>
             </properties>
         </action>
         <action>
@@ -28,7 +28,7 @@
                 <exec.args>-Xdebug -Xrunjdwp:transport=dt_socket,server=n,address=${jpda.address} -classpath %classpath co.kademi.sync.KSync3 -command publish -user kademibrad -force</exec.args>
                 <exec.executable>java</exec.executable>
                 <jpda.listen>true</jpda.listen>
-                <exec.workingdir>/home/brad/proj/kademi-dev/src/main/marketplace</exec.workingdir>
+                <exec.workingdir>/home/brad/kademi-dev/src/main/marketplace</exec.workingdir>
             </properties>
         </action>
         <action>
@@ -43,7 +43,7 @@
             <properties>
                 <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command publish -user kademibrad -force</exec.args>
                 <exec.executable>java</exec.executable>
-                <exec.workingdir>C:\Users\brad\proj\kademi-dev\src\main\marketplace</exec.workingdir>
+                <exec.workingdir>/home/brad/kademi-dev/src/main/marketplace</exec.workingdir>
             </properties>
         </action>
     </actions>
