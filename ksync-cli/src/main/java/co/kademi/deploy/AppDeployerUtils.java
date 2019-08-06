@@ -4,6 +4,7 @@ import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.apache.commons.io.IOUtils;
@@ -32,5 +33,13 @@ public class AppDeployerUtils {
         IOUtils.closeQuietly(out);
 
         return dest.toByteArray();
+    }
+
+    public static byte[] compressBulkChunkFanouts(Set<AppDeployer.FanoutBean> toUpload) throws Exception{
+        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    }
+
+    static byte[] compressBulkFileFanouts(Set<AppDeployer.FanoutBean> toUpload) {
+        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
     }
 }
