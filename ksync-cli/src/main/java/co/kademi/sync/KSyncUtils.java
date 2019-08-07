@@ -7,7 +7,9 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.function.Consumer;
@@ -50,7 +52,6 @@ public class KSyncUtils {
             String sIgnore = props.getProperty("ignore");
             List<String> ignores = split(sIgnore);
 
-
             String pwd = line.getOptionValue("password");
             if (StringUtils.isBlank(pwd)) {
                 Console con = System.console();
@@ -65,7 +66,8 @@ public class KSyncUtils {
             }
 
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync, ignores);
+                Map<String, String> cookies = getCookies(props);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync, ignores, cookies);
                 c.accept(configDir, kSync3);
             } catch (IOException ex) {
                 System.out.println("Ex: " + ex.getMessage());
@@ -75,12 +77,28 @@ public class KSyncUtils {
 
     private static List<String> split(String sIgnore) {
         List<String> list = new ArrayList<>();
-        if( StringUtils.isNotBlank(sIgnore)) {
-            for( String s : sIgnore.split(",")) {
+        if (StringUtils.isNotBlank(sIgnore)) {
+            for (String s : sIgnore.split(",")) {
                 list.add(s.trim());
             }
         }
         return list;
+    }
+
+    public static Map<String, String> getCookies(File repoDir) {
+        Properties props = readProps(repoDir);
+        return getCookies(props);
+    }
+
+    public static Map<String, String> getCookies(Properties props) {
+        Map<String, String> map = new HashMap<>();
+        if (props.containsKey("userUrl")) {
+            map.put("miltonUserUrl", props.getProperty("userUrl"));
+        }
+        if (props.containsKey("userUrlHash")) {
+            map.put("miltonUserUrlHash", props.getProperty("userUrlHash"));
+        }
+        return map;
     }
 
     public interface KSyncCommand {
@@ -89,7 +107,7 @@ public class KSyncUtils {
     }
 
     public static void writeProps(String url, String user, File repoDir) {
-        Properties props = new Properties();
+        Properties props = readProps(repoDir);
         props.put("url", url);
         props.put("user", user);
         writeProps(props, repoDir);
@@ -97,6 +115,7 @@ public class KSyncUtils {
 
     public static void writeProps(Properties props, File repoDir) {
         File file = new File(repoDir, "ksync.properties");
+        log.info("writeProps: updating file {}", file.getAbsolutePath());
         try (FileOutputStream fout = new FileOutputStream(file)) {
             props.store(fout, null);
         } catch (Throwable e) {
@@ -104,15 +123,25 @@ public class KSyncUtils {
         }
     }
 
+    public static void writeLoginProps(String userUrl, String userUrlHash, File repoDir) {
+        repoDir.mkdirs();
+        Properties props = readProps(repoDir);
+        props.setProperty("userUrl", userUrl);
+        props.setProperty("userUrlHash", userUrlHash);
+        writeProps(props, repoDir);
+    }
+
     public static Properties readProps(File repoDir) {
         File file = new File(repoDir, "ksync.properties");
         Properties props = new Properties();
-        try (FileInputStream fi = new FileInputStream(file)) {
-            props.load(fi);
-        } catch (FileNotFoundException ex) {
-            throw new RuntimeException(ex);
-        } catch (IOException ex) {
-            throw new RuntimeException(ex);
+        if (file.exists()) {
+            try (FileInputStream fi = new FileInputStream(file)) {
+                props.load(fi);
+            } catch (FileNotFoundException ex) {
+                throw new RuntimeException(ex);
+            } catch (IOException ex) {
+                throw new RuntimeException(ex);
+            }
         }
         return props;
     }

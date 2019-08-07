@@ -29,6 +29,19 @@ public class KSync3Utils {
         return null;
     }
 
+    public static String getInput(String text) {
+        Console con = System.console();
+        String s;
+        if (con != null) {
+            s = con.readLine("Please enter " + text + ": ");
+        } else {
+            Scanner scanner = new Scanner(System.in);
+            System.out.println("Please enter " + text + ": ");
+            s = scanner.nextLine();
+        }
+        return s;
+    }
+
     public static String getInput(Options options, CommandLine line, String optionName, Properties props) {
         if (props != null && props.containsKey(optionName)) {
             String s = props.getProperty(optionName);
@@ -68,7 +81,6 @@ public class KSync3Utils {
         return s;
     }
 
-
     public static File getRootDir(CommandLine line) {
         String s = line.getOptionValue("rootdir");
         if (StringUtils.isBlank(s)) {
@@ -97,11 +109,11 @@ public class KSync3Utils {
     }
 
     static boolean ignored(String name, List<String> ignores) {
-        if( ignores == null ) {
+        if (ignores == null) {
             return false;
         }
-        for( String s : ignores) {
-            if( name.equals(s)) {
+        for (String s : ignores) {
+            if (name.equals(s)) {
                 return true;
             }
         }

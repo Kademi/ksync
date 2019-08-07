@@ -4,6 +4,7 @@
 package co.kademi.deploy;
 
 import co.kademi.sync.KSync3Utils;
+import co.kademi.sync.KSyncUtils;
 import io.milton.common.Path;
 import io.milton.event.EventManagerImpl;
 import io.milton.http.exceptions.BadRequestException;
@@ -117,35 +118,44 @@ public class AppDeployer {
         return result + part;
     }
 
-    public static void publish(Options options, CommandLine line) throws MalformedURLException, IOException {
-        File dir = KSync3Utils.getRootDir(line);
-        //userDir = "/home/brad/proj/kademi-dev/src/main/marketplace/";
+    public static void publish(Options options, CommandLine line) {
+        KSyncUtils.withDir((File dir) -> {
+            if (!dir.exists()) {
+                System.out.println("Dir not found: " + dir.getAbsolutePath());
+                return;
+            }
+            log.info("Current directory: " + dir.getAbsolutePath());
+            File configDir = new File(dir, ".ksync");
+            Map cookies = KSyncUtils.getCookies(configDir);
+            String url = KSync3Utils.getInput(options, line, "url", null);
+            String user = KSync3Utils.getInput(options, line, "user", null);
+            String password = null;
+            if (cookies.isEmpty()) {
+                password = KSync3Utils.getPassword(line, user, url);
+            }
+            String appIds = KSync3Utils.getInput(options, line, "appids", null);
 
-        if (!dir.exists()) {
-            System.out.println("Dir not found: " + dir.getAbsolutePath());
-            return;
-        }
-        log.info("Current directory: " + dir.getAbsolutePath());
-        String url = KSync3Utils.getInput(options, line, "url", null);
-        String user = KSync3Utils.getInput(options, line, "user", null);
-        String password = KSync3Utils.getPassword(line, user, url);
-        String appIds = KSync3Utils.getInput(options, line, "appids", null);
+            AppDeployer d = null;
+            try {
+                d = new AppDeployer(dir, url, user, password, appIds, cookies);
+                d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
+                d.force = KSync3Utils.getBooleanInput(line, "force");
+                d.report = KSync3Utils.getBooleanInput(line, "report");
 
-        AppDeployer d = new AppDeployer(dir, url, user, password, appIds);
-        d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
-        d.force = KSync3Utils.getBooleanInput(line, "force");
-        d.report = KSync3Utils.getBooleanInput(line, "report");
+                log.info("---- OPTIONS ----");
+                log.info("url: " + url);
+                log.info("dir: " + dir.getAbsolutePath());
+                log.info("  -autoincrement: " + d.autoIncrement);
+                log.info("  -report: " + d.report);
+                log.info("  -force: " + d.force);
+                log.info("--------------");
+                d.upsync();
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
 
-        log.info("---- OPTIONS ----");
-        log.info("url: " + url);
-        log.info("dir: " + dir.getAbsolutePath());
-        log.info("  -autoincrement: " + d.autoIncrement);
-        log.info("  -report: " + d.report);
-        log.info("  -force: " + d.force);
-        log.info("--------------");
-        d.upsync();
-
-        log.info("Completed");
+            log.info("Completed");
+        }, options);
         System.exit(0);
     }
 
@@ -166,13 +176,17 @@ public class AppDeployer {
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
 
-    public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds) throws MalformedURLException {
+    public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
         int timeout = 30000;
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
         client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
+        if (cookies != null) {
+            client.getCookies().putAll(cookies);
+            client.setUsePreemptiveAuth(false);
+        }
         client.setUseDigestForPreemptiveAuth(false);
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);

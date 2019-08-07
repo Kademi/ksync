@@ -10,6 +10,7 @@ import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
 import io.milton.httpclient.Host;
 import io.milton.httpclient.HttpException;
+import io.milton.httpclient.HttpResult;
 import io.milton.sync.HttpBlobStore;
 import io.milton.sync.HttpBloomFilterHashCache;
 import io.milton.sync.HttpHashStore;
@@ -17,9 +18,13 @@ import io.milton.sync.triplets.DeltaGenerator;
 import io.milton.sync.triplets.FileUpdatingMergingDeltaListener;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -39,6 +44,21 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.auth.AuthScheme;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.protocol.BasicHttpContext;
+import org.apache.http.protocol.HttpContext;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Combiner;
 import org.hashsplit4j.api.Fanout;
@@ -70,6 +90,7 @@ public class KSync3 {
         commands.add(new PullCommand());
         commands.add(new SyncCommand());
         commands.add(new PublishCommand());
+        commands.add(new LoginCommand());
     }
 
     public static void main(String[] arg) throws IOException {
@@ -234,16 +255,48 @@ public class KSync3 {
         public void execute(Options options, CommandLine line) {
             try {
                 AppDeployer.publish(options, line);
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 log.error("Invalie URL", ex);
             }
         }
+    }
 
+    public static class LoginCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "login";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) {
+            login(options, line);
+        }
     }
 
     public static void showUsage(Options options) {
         HelpFormatter formatter = new HelpFormatter();
         formatter.printHelp("ksync3", options);
+    }
+
+    private static void login(Options options, CommandLine line) {
+        KSyncUtils.withDir((File dir) -> {
+            String url = KSync3Utils.getInput(options, line, "url", null);
+            String user = KSync3Utils.getInput(options, line, "user", null);
+            String pwd = KSync3Utils.getPassword(line, url, user);
+
+            File repoDir = new File(dir, ".ksync");
+            try {
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
+                kSync3.login(null);
+            } catch (Exception e) {
+                System.out.println("Exception occured");
+                e.printStackTrace();
+            }
+
+        }, options);
+        
+        System.exit(0);
     }
 
     private static void checkout(Options options, CommandLine line) {
@@ -257,9 +310,9 @@ public class KSync3 {
             File repoDir = new File(dir, ".ksync");
             repoDir.mkdirs();
             KSyncUtils.writeProps(url, user, repoDir);
-
+            Map cookies = KSyncUtils.getCookies(repoDir);
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores, cookies);
                 kSync3.checkout(repoDir, ignores);
                 kSync3.showErrors();
             } catch (IOException ex) {
@@ -333,21 +386,30 @@ public class KSync3 {
     private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
     private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
     private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+    private final File repoDir;
 
     private final List<String> errors = new ArrayList<>();
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String,String> cookies) throws MalformedURLException, IOException {
         this.localDir = localDir;
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
         client = new Host(url.getHost(), url.getPort(), user, pwd, null);
+        if( cookies.isEmpty()) {
+            client.setUsePreemptiveAuth(true);
+        } else {
+            client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
+        }
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
         client.setTimeout(30000);
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
+        if( cookies != null ) {
+            client.getCookies().putAll(cookies);
+        }
 
-        File repoDir = new File(localDir, ".ksync");
+        repoDir = new File(localDir, ".ksync");
         this.localBlobStore = new FileSystem2BlobStore(new File(repoDir, "blobs"));
         this.localHashStore = new FileSystem2HashStore(new File(repoDir, "hashes"));
 
@@ -404,6 +466,91 @@ public class KSync3 {
         log.info("Done initial scan, now begin monitoring..");
         tripletStore.start();
         log.info("Done monitor init");
+    }
+
+    private void login(String secondFactor) {
+        log.info("login");
+
+        HttpClient hc = this.client.getClient();
+        HttpPost m = new HttpPost(this.client.baseHref());
+
+        List<NameValuePair> formparams = new ArrayList<>();
+        if( secondFactor != null ) {
+            formparams.add(new BasicNameValuePair("_login2FA", secondFactor));
+        }
+        UrlEncodedFormEntity entity;
+        try {
+            entity = new UrlEncodedFormEntity(formparams);
+        } catch (UnsupportedEncodingException ex) {
+            throw new RuntimeException(ex);
+        }
+        m.setEntity(entity);
+        try {
+            ByteArrayOutputStream bout = new ByteArrayOutputStream();
+            HttpResult result = executeHttpWithResult(hc, m, bout, newContext());
+            int res = result.getStatusCode();
+            switch (res) {
+                case 401:
+                    log.info("Authentication failed. Is 2FA required?");
+                    String s = KSync3Utils.getInput("2FA code");
+                    if( StringUtils.isNotBlank(s)) {
+                        login(s);
+                    } else {
+                        log.info("Login aborted");
+                    }   
+                    break;
+                case 200:
+                    log.info("login: completed {}", res);                
+                    // save auth token cookie to props file
+                    Map<String, String> headers = result.getHeaders();
+                    String setCookie = headers.get("Set-Cookie");
+                    log.info("cookies: {}", setCookie);
+                // miltonUserUrlHash="735e226b-2a44-4ed1-b058-1d3385ca861d:evwTfxqg682WLKGbpGyaSz7oWDc"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
+                    String[] arr = setCookie.split("\"");
+                    String userUrlHash = arr[1];
+                    String userUrl = "/users/" + this.client.user + "/";
+                    KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir); 
+                    break;
+
+
+
+                default:
+                    log.warn("login: unhandled result code: {}", res);
+                    break;
+            }
+        } catch (IOException ex) {
+            log.error("login: exception occured",ex);
+        }
+    }
+    
+    public static HttpResult executeHttpWithResult(HttpClient client, HttpUriRequest m, OutputStream out, HttpContext context) throws IOException {
+        HttpResponse resp = client.execute(m, context);
+        HttpEntity entity = resp.getEntity();
+        if( entity != null ) {
+            InputStream in = null;
+            try {
+                in = entity.getContent();
+                if( out != null ) {
+                    IOUtils.copy(in, out);
+                }
+            } finally {
+                IOUtils.closeQuietly(in);
+            }
+        }
+        Map<String,String> mapOfHeaders = new HashMap<>();
+        Header[] respHeaders = resp.getAllHeaders();
+        for( Header h : respHeaders) {
+            mapOfHeaders.put(h.getName(), h.getValue()); // TODO: should concatenate multi-valued headers
+        }
+        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapOfHeaders);
+        return result;
+    }      
+
+    protected HttpContext newContext() {
+        HttpContext context = new BasicHttpContext();
+        AuthScheme authScheme = new BasicScheme();
+        context.setAttribute("preemptive-auth", authScheme);
+        return context;
     }
 
     private void push(String localRootHash, File configDir) throws IOException, InterruptedException {
