@@ -1,6 +1,5 @@
 package co.kademi.sync;
 
-import java.io.Console;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -11,7 +10,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Scanner;
 import java.util.function.Consumer;
 import net.sf.json.JSONArray;
 import org.apache.commons.cli.CommandLine;
@@ -27,6 +25,33 @@ import org.slf4j.LoggerFactory;
 public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
+
+    public static void withKsync(Consumer<KSync3> c, Options options, CommandLine line, boolean needsUrl) {
+        KSyncUtils.withDir((File dir) -> {
+            File configDir = new File(dir, ".ksync");
+            configDir.mkdirs();
+            Map cookies = KSyncUtils.getCookies(configDir);
+            Properties props = KSyncUtils.readProps(configDir);
+            String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
+            String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
+            String pwd = null;
+            if (cookies.isEmpty()) {
+                pwd = KSync3Utils.getPassword(line, url, user);
+            } else {
+                log.info("We have login cookies, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
+            }
+            String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
+            List<String> ignores = KSync3Utils.split(sIgnores);
+            KSyncUtils.writeProps(url, user, configDir);
+            try {
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, false, ignores, cookies);
+                c.accept(kSync3);
+            } catch (Exception ex) {
+                System.out.println("Could not execute command: " + ex.getMessage());
+                ex.printStackTrace();
+            }
+        }, options);
+    }
 
     public static void withDir(Consumer<File> s, Options options) {
         String curDir = System.getProperty("user.dir");
@@ -44,35 +69,39 @@ public class KSyncUtils {
     }
 
     public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) {
-        KSyncUtils.withDir((File dir) -> {
-            File configDir = new File(dir, ".ksync");
-            Properties props = KSyncUtils.readProps(configDir);
-            String url = props.getProperty("url");
-            String user = props.getProperty("user");
-            String sIgnore = props.getProperty("ignore");
-            List<String> ignores = split(sIgnore);
-
-            String pwd = line.getOptionValue("password");
-            if (StringUtils.isBlank(pwd)) {
-                Console con = System.console();
-                if (con != null) {
-                    char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
-                    pwd = new String(chars);
-                } else {
-                    Scanner scanner = new Scanner(System.in);
-                    System.out.println("Enter your password for " + user + "@" + url + ":");
-                    pwd = scanner.next();
-                }
-            }
-
-            try {
-                Map<String, String> cookies = getCookies(props);
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync, ignores, cookies);
-                c.accept(configDir, kSync3);
-            } catch (IOException ex) {
-                System.out.println("Ex: " + ex.getMessage());
-            }
-        }, options);
+        withKsync((KSync3 kSync3) -> {
+            c.accept(kSync3.getConfigDir(), kSync3);
+        }, options, line, false);
+//
+//        KSyncUtils.withDir((File dir) -> {
+//            File configDir = new File(dir, ".ksync");
+//            Properties props = KSyncUtils.readProps(configDir);
+//            String url = props.getProperty("url");
+//            String user = props.getProperty("user");
+//            String sIgnore = props.getProperty("ignore");
+//            List<String> ignores = split(sIgnore);
+//
+//            String pwd = line.getOptionValue("password");
+//            if (StringUtils.isBlank(pwd)) {
+//                Console con = System.console();
+//                if (con != null) {
+//                    char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ":");
+//                    pwd = new String(chars);
+//                } else {
+//                    Scanner scanner = new Scanner(System.in);
+//                    System.out.println("Enter your password for " + user + "@" + url + ":");
+//                    pwd = scanner.next();
+//                }
+//            }
+//
+//            try {
+//                Map<String, String> cookies = getCookies(props);
+//                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, backgroundSync, ignores, cookies);
+//                c.accept(configDir, kSync3);
+//            } catch (IOException ex) {
+//                System.out.println("Ex: " + ex.getMessage());
+//            }
+//        }, options);
     }
 
     private static List<String> split(String sIgnore) {
@@ -108,8 +137,12 @@ public class KSyncUtils {
 
     public static void writeProps(String url, String user, File repoDir) {
         Properties props = readProps(repoDir);
-        props.put("url", url);
-        props.put("user", user);
+        if (StringUtils.isNotBlank(url)) {
+            props.put("url", url);
+        }
+        if (StringUtils.isNotBlank(user)) {
+            props.put("user", user);
+        }
         writeProps(props, repoDir);
     }
 

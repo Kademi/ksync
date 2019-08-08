@@ -132,6 +132,8 @@ public class KSync3 {
 
         cmd.execute(options, line);
 
+        System.exit(0); // threads arent shutting down
+
     }
 
     private void showErrors() {
@@ -295,32 +297,37 @@ public class KSync3 {
             }
 
         }, options);
-        
+
         System.exit(0);
     }
 
     private static void checkout(Options options, CommandLine line) {
-        KSyncUtils.withDir((File dir) -> {
-            String url = KSync3Utils.getInput(options, line, "url", null);
-            String user = KSync3Utils.getInput(options, line, "user", null);
-            String pwd = KSync3Utils.getPassword(line, url, user);
-            String sIgnores = KSync3Utils.getInput(options, line, "ignore", null);
-            List<String> ignores = KSync3Utils.split(sIgnores);
+        KSyncUtils.withKsync((KSync3 kSync3) -> {
+            kSync3.checkout(kSync3.repoDir);
+            kSync3.showErrors();
+        }, options, line, true);
 
-            File repoDir = new File(dir, ".ksync");
-            repoDir.mkdirs();
-            KSyncUtils.writeProps(url, user, repoDir);
-            Map cookies = KSyncUtils.getCookies(repoDir);
-            try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores, cookies);
-                kSync3.checkout(repoDir, ignores);
-                kSync3.showErrors();
-            } catch (IOException ex) {
-                System.out.println("Could not checkout: " + ex.getMessage());
 
-            }
-
-        }, options);
+//        KSyncUtils.withDir((File dir) -> {
+//            String url = KSync3Utils.getInput(options, line, "url", null);
+//            String user = KSync3Utils.getInput(options, line, "user", null);
+//            String pwd = KSync3Utils.getPassword(line, url, user);
+//
+//
+//            File repoDir = new File(dir, ".ksync");
+//            repoDir.mkdirs();
+//            KSyncUtils.writeProps(url, user, repoDir);
+//            Map cookies = KSyncUtils.getCookies(repoDir);
+//            try {
+//                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores, cookies);
+//                kSync3.checkout(repoDir, ignores);
+//                kSync3.showErrors();
+//            } catch (IOException ex) {
+//                System.out.println("Could not checkout: " + ex.getMessage());
+//
+//            }
+//
+//        }, options);
     }
 
     private static void commit(Options options, CommandLine line) {
@@ -387,15 +394,19 @@ public class KSync3 {
     private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
     private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
     private final File repoDir;
+    private final File configDir;
+    private final List<String> ignores;
 
     private final List<String> errors = new ArrayList<>();
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String,String> cookies) throws MalformedURLException, IOException {
         this.localDir = localDir;
+        this.configDir = configDir;
+        this.ignores = ignores;
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
         client = new Host(url.getHost(), url.getPort(), user, pwd, null);
-        if( cookies.isEmpty()) {
+        if( cookies != null && cookies.isEmpty()) {
             client.setUsePreemptiveAuth(true);
         } else {
             client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
@@ -497,10 +508,10 @@ public class KSync3 {
                         login(s);
                     } else {
                         log.info("Login aborted");
-                    }   
+                    }
                     break;
                 case 200:
-                    log.info("login: completed {}", res);                
+                    log.info("login: completed {}", res);
                     // save auth token cookie to props file
                     Map<String, String> headers = result.getHeaders();
                     String setCookie = headers.get("Set-Cookie");
@@ -509,7 +520,7 @@ public class KSync3 {
                     String[] arr = setCookie.split("\"");
                     String userUrlHash = arr[1];
                     String userUrl = "/users/" + this.client.user + "/";
-                    KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir); 
+                    KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
                     break;
 
 
@@ -522,7 +533,7 @@ public class KSync3 {
             log.error("login: exception occured",ex);
         }
     }
-    
+
     public static HttpResult executeHttpWithResult(HttpClient client, HttpUriRequest m, OutputStream out, HttpContext context) throws IOException {
         HttpResponse resp = client.execute(m, context);
         HttpEntity entity = resp.getEntity();
@@ -544,7 +555,7 @@ public class KSync3 {
         }
         HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapOfHeaders);
         return result;
-    }      
+    }
 
     protected HttpContext newContext() {
         HttpContext context = new BasicHttpContext();
@@ -740,7 +751,7 @@ public class KSync3 {
         }
     }
 
-    private void checkout(File configDir, List<String> ignores) {
+    private void checkout(File configDir) {
         log.info("checkout {}", branchPath);
         String hash = getRemoteHash(branchPath);
         try {
@@ -894,6 +905,18 @@ public class KSync3 {
     public String getBranchPath() {
         return branchPath;
     }
+
+    public List<String> getIgnores() {
+        return ignores;
+    }
+
+    public File getConfigDir() {
+        return configDir;
+    }
+
+
+
+
 
     private void push(File configDir) {
         String hash = commit();

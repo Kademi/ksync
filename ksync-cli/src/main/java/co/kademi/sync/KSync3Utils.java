@@ -5,6 +5,7 @@ import java.io.Console;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
@@ -43,6 +44,10 @@ public class KSync3Utils {
     }
 
     public static String getInput(Options options, CommandLine line, String optionName, Properties props) {
+        return getInput(options, line, optionName, props, true);
+    }
+
+    public static String getInput(Options options, CommandLine line, String optionName, Properties props, boolean promptIfNotPresent) {
         if (props != null && props.containsKey(optionName)) {
             String s = props.getProperty(optionName);
             if (StringUtils.isNotBlank(s)) {
@@ -50,6 +55,9 @@ public class KSync3Utils {
             }
         }
 
+        if (!promptIfNotPresent) {
+            return null;
+        }
         String s = line.getOptionValue(optionName);
         if (StringUtils.isBlank(s)) {
             Option opt = options.getOption(optionName);
@@ -95,12 +103,12 @@ public class KSync3Utils {
     }
 
     public static List<String> split(String s) {
-        String[] arr = s.split(",");
         if (StringUtils.isBlank(s)) {
             return null;
         } else {
+            String[] arr = s.split(",");
             List<String> list = new ArrayList<>();
-            for (String ss : s.split(",")) {
+            for (String ss : arr) {
                 ss = ss.trim();
                 list.add(ss);
             }
