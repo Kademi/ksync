@@ -162,7 +162,7 @@ public class AppDeployer {
     private final File rootDir;
     private final Host client;
     private final List<String> appIds;
-    private final List<String> results = new ArrayList<>();
+    private final Results results = new Results();
 
     private HttpBlobStore httpBlobStore;
     private HttpHashStore httpHashStore;
@@ -242,7 +242,16 @@ public class AppDeployer {
         System.out.println("");
         System.out.println("");
         System.out.println("-------- RESULTS -------------");
-        for (String s : results) {
+        System.out.println("-- INFO -- ");
+        for (String s : results.infos) {
+            System.out.println(s);
+        }
+        System.out.println("-- WARNINGS -- ");
+        for (String s : results.warnings) {
+            System.out.println(s);
+        }
+        System.out.println("-- ERRORS -- ");
+        for (String s : results.errors) {
             System.out.println(s);
         }
         System.out.println("");
@@ -267,14 +276,13 @@ public class AppDeployer {
                 String appName = appDir.getName();
 
                 if (isProcess(appDir)) {
-                    String result = processAppDir(appName, isTheme, isApp, appDir, fileWatchService);
-                    results.add(result);
+                    processAppDir(appName, isTheme, isApp, appDir, fileWatchService);
                 }
             }
         }
     }
 
-    private String processAppDir(String appName, boolean isTheme, boolean isApp, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
+    private void processAppDir(String appName, boolean isTheme, boolean isApp, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
         log.info("checkCreateApp {} {}", appName);
         String appPath = "/manageApps/" + appName;
         boolean appCreated = false;
@@ -283,7 +291,8 @@ public class AppDeployer {
                 appCreated = true;
                 log.info("created app {}", appName);
             } else {
-                return "Couldnt create app " + appName;
+                results.errors.add(appName + " - couldnt create app");
+                return;
             }
         }
 
@@ -299,7 +308,8 @@ public class AppDeployer {
             if (localHash == null) {
                 log.warn("Could not get local hash for " + appDir);
                 if (!force) {
-                    return appName + " version " + versionName + " is already published, but could not find local hash to compare";
+                    results.errors.add(appName + " version " + versionName + " is already published, but could not find local hash to compare");
+                    return;
                 }
             } else {
                 String branchPath = "/repositories/" + appName + "/" + versionName + "/";
@@ -309,14 +319,16 @@ public class AppDeployer {
                         log.info("App is an exact match local and remote ={} but force is true, so push anyway", localHash);
                     } else {
                         log.info("App is an exact match local and remote ={}", localHash);
-                        return appName + " version " + versionName + " is already published, and exactly matches local " + localHash;
+                        results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
+                        return;
                     }
                 } else {
                     if (force) {
                         log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
                     } else {
                         log.warn("App is not the same as published version. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
-                        return "WARN " + appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash;
+                        results.warnings.add( appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash);
+                        return;
                     }
                 }
             }
@@ -327,19 +339,22 @@ public class AppDeployer {
 
             if (appCreated) {
                 if (!addToMarketPlace(appName)) {
-                    return "Did not add app to marketplace " + appPath;
+                    results.errors.add( appName + " Did not add app to marketplace " + appPath);
+                    return;
                 }
             }
 
             String branchPath = "/repositories/" + appName + "/";
 
             if (report) {
-                return "Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash;
+                results.infos.add( appName + " - Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash);
+                return;
             } else {
                 if (makeCurrentVersionLive(branchPath, versionName)) {
                     // Republic, so the live version is the published version
                     if (!publishApp(appName)) {
-                        return "Pushed, but could not (re)publish app to marketplace " + appPath;
+                        results.errors.add(appName + "Pushed, but could not (re)publish app to marketplace " + appPath);
+                        return;
                     }
 
                     if (autoIncrement) {
@@ -350,14 +365,17 @@ public class AppDeployer {
                         }
                     }
 
-                    return "Published " + appName + " version " + versionName + " with hash " + localHash;
+                    results.infos.add(appName + " - Published " + appName + " version " + versionName + " with hash " + localHash);
+                    return;
                 } else {
-                    return "Failed to publish version " + appName;
+                    results.errors.add(appName + " - Failed to publish version " + appName);
+                    return;
                 }
             }
 
         } else {
-            return "Failed to sync local to remote " + appName;
+            results.errors.add(appName + " Failed to sync local to remote " + appName);
+            return;
         }
 
     }
@@ -421,7 +439,7 @@ public class AppDeployer {
             if (needsPush.get()) {
                 try {
                     log.info("File changed in {}, new repo hash {}", localRootDir, newHash);
-                    push(newHash, branchPath);
+                    push(appName, newHash, branchPath);
 
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
@@ -435,7 +453,7 @@ public class AppDeployer {
         }
     }
 
-    private void push(String localRootHash, String branchPath) {
+    private void push(String appName, String localRootHash, String branchPath) {
         String remoteHash = getRemoteHash(branchPath);
         if (remoteHash == null) {
             log.info("Aborted");
@@ -514,10 +532,10 @@ public class AppDeployer {
 
             }
             log.info("Push failed: But missing objects have been uploaded so will try again :)", res);
-            push(localRootHash, branchPath);
+            push(appName, localRootHash, branchPath);
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
-            results.add("EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
+            results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
             throw new RuntimeException(ex);
         }
     }
@@ -543,7 +561,7 @@ public class AppDeployer {
                 log.info("Created version {}", versionName);
             } else {
                 if (report) {
-                    results.add("Would have created " + versionName + " because that version doesnt exist");
+                    results.infos.add(appName + " - Would have created " + versionName + " because that version doesnt exist");
                     return false;
                 } else {
                     throw new RuntimeException("Couldnt create version " + versionPath);
@@ -800,10 +818,6 @@ public class AppDeployer {
         }
     }
 
-    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
-    private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
-
     public class AppDeployerBlobStore implements BlockingBlobStore {
 
         private final Host host;
@@ -815,6 +829,9 @@ public class AppDeployer {
 
         private boolean running = true;
         private Exception transferException;
+        private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
+        private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
 
         public AppDeployerBlobStore(Host host, BlobStore local, BlobStore remote, boolean bulkUpload) {
             this.host = host;
@@ -828,7 +845,6 @@ public class AppDeployer {
                         Set<BlobImpl> toUpload = new HashSet<>();
                         this.blobs.drainTo(toUpload, 100);
                         if (!toUpload.isEmpty()) {
-                            transferQueueCounter.up();
                             doBulkUpload(toUpload);
                         } else {
                             Thread.sleep(300);
@@ -855,14 +871,17 @@ public class AppDeployer {
                     throw new RuntimeException(ex);
                 }
             } else {
-                transferQueueCounter.up();
+                transferQueueCounter.up("blob");
                 transferExecutor.submit(() -> {
-                    log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count);
+                    log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count());
                     long tm = System.currentTimeMillis();
-                    //System.out.println("upload " + dirHash);
-                    remote.setBlob(hash, bytes);
-                    transferQueueCounter.down();
-                    //System.out.println("done upload " + dirHash);
+                    try {
+                        //System.out.println("upload " + dirHash);
+                        remote.setBlob(hash, bytes);
+                        //System.out.println("done upload " + dirHash);                        
+                    } finally {
+                        transferQueueCounter.down("blob");
+                    }
                     tm = System.currentTimeMillis() - tm;
                     log.info("Transferred blob in {} ms", tm);
                 });
@@ -889,19 +908,20 @@ public class AppDeployer {
                 throw new RuntimeException("Exception occured uploading blobs", transferException);
             }
 
-            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
-            while (transferQueueCounter.count > 0 || !this.blobs.isEmpty()) {
+            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
+            while (transferQueueCounter.count() > 0 || !this.blobs.isEmpty()) {
                 if (transferException != null) {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
-                log.info("..waiting for blob transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count);
+                log.info("..waiting for blob transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count());
                 Thread.sleep(1000);
             }
         }
 
         public final void doBulkUpload(Set<BlobImpl> blobss) throws IOException {
             log.info("doBulkUpload: upload {} blobs", blobss.size());
-
+            Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
+            transferQueueCounter.up(destPath.toString());
             transferExecutor.submit(() -> {
                 try {
                     byte[] blobsZip;
@@ -911,7 +931,6 @@ public class AppDeployer {
                         throw new RuntimeException(ex);
                     }
 
-                    Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
                     HttpResult result;
                     try {
                         result = host.doPut(destPath, blobsZip, "application/zip");
@@ -926,8 +945,8 @@ public class AppDeployer {
                     transferException = ex;
                     log.error("Exception in blobs transfer", ex);
                 } finally {
-                    transferQueueCounter.down();
-                    log.info("doBulkUpload: DONE upload {} blobs; transfer count={}", blobss.size(), transferQueueCounter.count);
+                    transferQueueCounter.down(destPath.toString());
+                    log.info("doBulkUpload: DONE upload {} blobs; transfer count={}", blobss.size(), transferQueueCounter.count());
                 }
             });
         }
@@ -962,6 +981,10 @@ public class AppDeployer {
         private boolean running = true;
         private Exception transferException;
 
+        private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
+        private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+
         public AppDeployerHashStore(Host host, HashStore local, HashStore remote) {
             this.host = host;
             this.local = local;
@@ -976,7 +999,6 @@ public class AppDeployer {
                         Set<FanoutBean> toUpload = new HashSet<>();
                         this.chunkBeans.drainTo(toUpload, 100);
                         if (!toUpload.isEmpty()) {
-                            transferQueueCounter.up();
                             doBulkFanoutUpload(toUpload, true);
                             didNothing = false;
                         }
@@ -984,7 +1006,6 @@ public class AppDeployer {
                         toUpload = new HashSet<>();
                         this.fileBeans.drainTo(toUpload, 100);
                         if (!toUpload.isEmpty()) {
-                            transferQueueCounter.up();
                             doBulkFanoutUpload(toUpload, false);
                             didNothing = false;
                         }
@@ -1054,7 +1075,14 @@ public class AppDeployer {
         }
 
         public final void doBulkFanoutUpload(Set<FanoutBean> toUpload, boolean isChunk) throws IOException {
+            final Path destPath;
+            if (isChunk) {
+                destPath = Path.path("/_hashes/chunkFanouts/").child("fanouts.zip");
+            } else {
+                destPath = Path.path("/_hashes/fileFanouts/").child("fanouts.zip");
+            }
 
+            transferQueueCounter.up(destPath.toString());
             transferExecutor.submit(() -> {
                 try {
                     byte[] chunksZip;
@@ -1064,12 +1092,6 @@ public class AppDeployer {
                         throw new RuntimeException(ex);
                     }
 
-                    Path destPath;
-                    if (isChunk) {
-                        destPath = Path.path("/_hashes/chunkFanouts/").child("fanouts.zip");
-                    } else {
-                        destPath = Path.path("/_hashes/fileFanouts/").child("fanouts.zip");
-                    }
                     HttpResult result;
                     try {
                         result = host.doPut(destPath, chunksZip, "application/zip");
@@ -1086,11 +1108,11 @@ public class AppDeployer {
                     transferException = ex;
                     log.error("Exception in fanouts transfer", ex);
                 } finally {
-                    transferQueueCounter.down();
-                    log.info("doBulkUpload: DONE upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count);
+                    transferQueueCounter.down(destPath.toString());
+                    log.info("doBulkUpload: DONE upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
                 }
             });
-            log.info("doBulkUpload: upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count);
+            log.info("doBulkUpload: upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
         }
 
         @Override
@@ -1098,12 +1120,12 @@ public class AppDeployer {
             if (transferException != null) {
                 throw new RuntimeException("Fanouts transfer exception", transferException);
             }
-            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count);
-            while (transferQueueCounter.count > 0 || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
+            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
+            while (transferQueueCounter.count() > 0 || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
                 if (transferException != null) {
                     throw new RuntimeException("Fanouts transfer exception", transferException);
                 }
-                log.info("..waiting for fanout transfers to complete. remaining={}", transferQueueCounter.count);
+                log.info("..waiting for fanout transfers to complete. remaining={}", transferQueueCounter.count());
                 Thread.sleep(1000);
             }
         }
@@ -1111,14 +1133,38 @@ public class AppDeployer {
 
     private class Counter {
 
-        private int count;
+        private List<String> list = new ArrayList<>();
 
-        synchronized void up() {
-            count++;
+        synchronized void up(String url) {
+            list.add(url);
         }
 
-        synchronized void down() {
-            count--;
+        synchronized void down(String url) {
+            list.remove(url);
+        }
+
+        public int count() {
+            return list.size();
         }
     }
+
+    public class Results {
+
+        private List<String> infos = new ArrayList<>();
+        private List<String> warnings = new ArrayList<>();
+        private List<String> errors = new ArrayList<>();
+
+        public List<String> getErrors() {
+            return errors;
+        }
+
+        public List<String> getInfos() {
+            return infos;
+        }
+
+        public List<String> getWarnings() {
+            return warnings;
+        }
+    }
+
 }
