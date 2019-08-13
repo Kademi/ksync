@@ -510,6 +510,9 @@ public class KSync3 {
                         log.info("Login aborted");
                     }
                     break;
+                case 400:
+                    log.info("Authentication failed. Is your userid correct?");
+                    break;                    
                 case 200:
                     log.info("login: completed {}", res);
                     // save auth token cookie to props file
