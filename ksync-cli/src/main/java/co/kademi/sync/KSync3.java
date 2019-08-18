@@ -8,6 +8,7 @@ import io.milton.http.exceptions.BadRequestException;
 import io.milton.http.exceptions.ConflictException;
 import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
+import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
 import io.milton.httpclient.HttpException;
 import io.milton.httpclient.HttpResult;
@@ -307,7 +308,6 @@ public class KSync3 {
             kSync3.showErrors();
         }, options, line, true);
 
-
 //        KSyncUtils.withDir((File dir) -> {
 //            String url = KSync3Utils.getInput(options, line, "url", null);
 //            String user = KSync3Utils.getInput(options, line, "user", null);
@@ -399,14 +399,14 @@ public class KSync3 {
 
     private final List<String> errors = new ArrayList<>();
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String,String> cookies) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
         this.localDir = localDir;
         this.configDir = configDir;
         this.ignores = ignores;
         eventManager = new EventManagerImpl();
         URL url = new URL(sRemoteAddress);
         client = new Host(url.getHost(), url.getPort(), user, pwd, null);
-        if( cookies != null && cookies.isEmpty()) {
+        if (cookies != null && cookies.isEmpty()) {
             client.setUsePreemptiveAuth(true);
         } else {
             client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
@@ -416,7 +416,7 @@ public class KSync3 {
         client.setTimeout(30000);
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
-        if( cookies != null ) {
+        if (cookies != null) {
             client.getCookies().putAll(cookies);
         }
 
@@ -486,7 +486,7 @@ public class KSync3 {
         HttpPost m = new HttpPost(this.client.baseHref());
 
         List<NameValuePair> formparams = new ArrayList<>();
-        if( secondFactor != null ) {
+        if (secondFactor != null) {
             formparams.add(new BasicNameValuePair("_login2FA", secondFactor));
         }
         UrlEncodedFormEntity entity;
@@ -504,7 +504,7 @@ public class KSync3 {
                 case 401:
                     log.info("Authentication failed. Is 2FA required?");
                     String s = KSync3Utils.getInput("2FA code");
-                    if( StringUtils.isNotBlank(s)) {
+                    if (StringUtils.isNotBlank(s)) {
                         login(s);
                     } else {
                         log.info("Login aborted");
@@ -513,47 +513,58 @@ public class KSync3 {
                 case 200:
                     log.info("login: completed {}", res);
                     // save auth token cookie to props file
-                    Map<String, String> headers = result.getHeaders();
-                    String setCookie = headers.get("Set-Cookie");
-                    log.info("cookies: {}", setCookie);
-                // miltonUserUrlHash="735e226b-2a44-4ed1-b058-1d3385ca861d:evwTfxqg682WLKGbpGyaSz7oWDc"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
-                    String[] arr = setCookie.split("\"");
-                    String userUrlHash = arr[1];
-                    String userUrl = "/users/" + this.client.user + "/";
-                    KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
+                    boolean foundCookie = false;
+                    List<String> cookies = result.getHeaderValues("Set-Cookie");
+                    for (String setCookie : cookies) {
+                        log.info("cookies: {}", setCookie);
+                        // miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
+                        // miltonUserUrlHash="735e226b-2a44-4ed1-b058-1d3385ca861d:evwTfxqg682WLKGbpGyaSz7oWDc"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
+                        String[] arr = setCookie.split("\"");
+                        String cookieName = arr[0];
+                        if (cookieName.startsWith("miltonUserUrlHash")) {
+                            String userUrlHash = arr[1];
+                            String userUrl = "/users/" + this.client.user + "/";
+                            KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
+                            foundCookie = true;
+                            break;
+                        }
+                    }
+                    if(!foundCookie){
+                        log.warn("Login seemed to succeed, but didnt find an authorisation cookie");
+                    }
+
                     break;
-
-
 
                 default:
                     log.warn("login: unhandled result code: {}", res);
                     break;
             }
         } catch (IOException ex) {
-            log.error("login: exception occured",ex);
+            log.error("login: exception occured", ex);
         }
     }
 
     public static HttpResult executeHttpWithResult(HttpClient client, HttpUriRequest m, OutputStream out, HttpContext context) throws IOException {
         HttpResponse resp = client.execute(m, context);
         HttpEntity entity = resp.getEntity();
-        if( entity != null ) {
+        if (entity != null) {
             InputStream in = null;
             try {
                 in = entity.getContent();
-                if( out != null ) {
+                if (out != null) {
                     IOUtils.copy(in, out);
                 }
             } finally {
                 IOUtils.closeQuietly(in);
             }
         }
-        Map<String,String> mapOfHeaders = new HashMap<>();
+
         Header[] respHeaders = resp.getAllHeaders();
-        for( Header h : respHeaders) {
-            mapOfHeaders.put(h.getName(), h.getValue()); // TODO: should concatenate multi-valued headers
+        List<Pair<String, String>> allHeaders = new ArrayList<>();
+        for (Header h : respHeaders) {
+            allHeaders.add(new Pair(h.getName(), h.getValue())); // TODO: should concatenate multi-valued headers
         }
-        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapOfHeaders);
+        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), allHeaders);
         return result;
     }
 
@@ -913,10 +924,6 @@ public class KSync3 {
     public File getConfigDir() {
         return configDir;
     }
-
-
-
-
 
     private void push(File configDir) {
         String hash = commit();
