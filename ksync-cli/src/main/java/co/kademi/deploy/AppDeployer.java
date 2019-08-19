@@ -917,7 +917,7 @@ public class AppDeployer {
                 if (transferException != null) {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
-                log.info("..waiting for blob transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count());
+                log.info("..waiting for blob transfers to complete. transferJobs={} remaining={} blobs={}", transferJobs.size(), transferQueueCounter.count(), this.blobs.size());
                 for( Runnable j : transferJobs ) {
                     log.info("                - " + j);
                 }
@@ -1001,6 +1001,7 @@ public class AppDeployer {
                 try {
                     while (running) {
 
+                        log.info("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
                         boolean didNothing = true;
 
                         Set<FanoutBean> toUpload = new HashSet<>();
@@ -1018,7 +1019,7 @@ public class AppDeployer {
                         }
 
                         if (didNothing) {
-                            Thread.sleep(300);
+                            Thread.sleep(2000);
                         }
                     }
                     log.info("AppDeployerBlobStore: transfer process finished");
@@ -1132,7 +1133,7 @@ public class AppDeployer {
                 if (transferException != null) {
                     throw new RuntimeException("Fanouts transfer exception", transferException);
                 }
-                log.info("..waiting for fanout transfers to complete. remaining={}", transferQueueCounter.count());
+                log.info("..waiting for fanout transfers to complete. transfers in progress={} chunkQueue={} fileQueue={}", transferQueueCounter.count(), chunkBeans.size(), fileBeans.size());
                 Thread.sleep(1000);
             }
         }
