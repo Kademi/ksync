@@ -176,10 +176,6 @@ public class AppDeployer {
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
 
-    private final LinkedBlockingQueue<Runnable> queueJobs = new LinkedBlockingQueue<>(100);
-    private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-    private final ExecutorService queueExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, queueJobs, rejectedExecutionHandler);
-
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
         this.rootDir = dir;
 
@@ -331,7 +327,7 @@ public class AppDeployer {
                         log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
                     } else {
                         log.warn("App is not the same as published version. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
-                        results.warnings.add( appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash);
+                        results.warnings.add(appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash);
                         return;
                     }
                 }
@@ -343,7 +339,7 @@ public class AppDeployer {
 
             if (appCreated) {
                 if (!addToMarketPlace(appName)) {
-                    results.errors.add( appName + " Did not add app to marketplace " + appPath);
+                    results.errors.add(appName + " Did not add app to marketplace " + appPath);
                     return;
                 }
             }
@@ -351,7 +347,7 @@ public class AppDeployer {
             String branchPath = "/repositories/" + appName + "/";
 
             if (report) {
-                results.infos.add( appName + " - Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash);
+                results.infos.add(appName + " - Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash);
                 return;
             } else {
                 if (makeCurrentVersionLive(branchPath, versionName)) {
@@ -836,6 +832,7 @@ public class AppDeployer {
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
         private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+        private final Thread queueProcessor;
 
         public AppDeployerBlobStore(Host host, BlobStore local, BlobStore remote, boolean bulkUpload) {
             this.host = host;
@@ -843,9 +840,9 @@ public class AppDeployer {
             this.remote = remote;
             this.bulkUpload = bulkUpload;
 
-            queueExecutor.submit(() -> {
+            queueProcessor = new Thread(() -> {
                 try {
-                    while (running) {
+                    while (!blobs.isEmpty() || running) {
                         Set<BlobImpl> toUpload = new HashSet<>();
                         this.blobs.drainTo(toUpload, 100);
                         if (!toUpload.isEmpty()) {
@@ -856,9 +853,11 @@ public class AppDeployer {
                     }
                     log.info("AppDeployerBlobStore: transfer process finished");
                 } catch (Exception ex) {
+                    log.error("AppDeployerBlobStore: exception", ex);
                     this.transferException = ex;
                 }
             });
+            queueProcessor.start();
         }
 
         @Override
@@ -869,6 +868,9 @@ public class AppDeployer {
             //remote.setBlob(hash, bytes);
 
             if (bulkUpload) {
+                if (!running) {
+                    throw new RuntimeException("Store is already stopped");
+                }
                 try {
                     blobs.put(new BlobImpl(hash, bytes));
                 } catch (InterruptedException ex) {
@@ -918,11 +920,12 @@ public class AppDeployer {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
                 log.info("..waiting for blob transfers to complete. transferJobs={} remaining={} blobs={}", transferJobs.size(), transferQueueCounter.count(), this.blobs.size());
-                for( Runnable j : transferJobs ) {
+                for (Runnable j : transferJobs) {
                     log.info("                - " + j);
                 }
                 Thread.sleep(1000);
             }
+            this.running = false;
         }
 
         public final void doBulkUpload(Set<BlobImpl> blobss) throws IOException {
@@ -991,15 +994,16 @@ public class AppDeployer {
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
         private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+        private final Thread queueProcessor;
 
         public AppDeployerHashStore(Host host, HashStore local, HashStore remote) {
             this.host = host;
             this.local = local;
             this.remote = remote;
 
-            queueExecutor.submit(() -> {
+            queueProcessor = new Thread(() -> {
                 try {
-                    while (running) {
+                    while (running || !chunkBeans.isEmpty() || !fileBeans.isEmpty() ) {
 
                         log.info("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
                         boolean didNothing = true;
@@ -1027,12 +1031,16 @@ public class AppDeployer {
                     this.transferException = ex;
                 }
             });
+            queueProcessor.start();
         }
 
         @Override
         public void setChunkFanout(String hash, List<String> blobHashes, long actualContentLength) {
             if (addedChunkFanouts.contains(hash)) {
                 return;
+            }
+            if (!running) {
+                throw new RuntimeException("Store is already stopped");
             }
             addedChunkFanouts.add(hash);
             if (!local.hasChunk(hash)) {
@@ -1136,6 +1144,7 @@ public class AppDeployer {
                 log.info("..waiting for fanout transfers to complete. transfers in progress={} chunkQueue={} fileQueue={}", transferQueueCounter.count(), chunkBeans.size(), fileBeans.size());
                 Thread.sleep(1000);
             }
+            this.running = false;
         }
     }
 

@@ -53,11 +53,11 @@ public class AppDeployerUtils {
             ByteArrayOutputStream fanoutOut = new ByteArrayOutputStream();
             FanoutSerializationUtils.writeFanout(fanout.blobHashes, fanout.actualContentLength, fanoutOut);
             byte[] bytes = fanoutOut.toByteArray();
-            String s = new String(bytes);
-            System.out.println("compress fanout\n" + s);
+            //String s = new String(bytes);
+            //System.out.println("compress fanout\n" + s);
             IOUtils.write(bytes, out);
         }
-        
+
         out.flush();
         out.finish();
 
