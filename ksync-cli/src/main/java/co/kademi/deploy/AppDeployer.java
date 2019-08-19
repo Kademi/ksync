@@ -920,9 +920,6 @@ public class AppDeployer {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
                 log.info("..waiting for blob transfers to complete. transferJobs={} remaining={} blobs={}", transferJobs.size(), transferQueueCounter.count(), this.blobs.size());
-                for (Runnable j : transferJobs) {
-                    log.info("                - " + j);
-                }
                 Thread.sleep(1000);
             }
             this.running = false;
