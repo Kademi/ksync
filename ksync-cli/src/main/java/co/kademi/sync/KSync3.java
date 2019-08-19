@@ -392,7 +392,7 @@ public class KSync3 {
 
     private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
     private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 20, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
     private final File repoDir;
     private final File configDir;
     private final List<String> ignores;
@@ -515,7 +515,7 @@ public class KSync3 {
                     break;
                 case 400:
                     log.info("Authentication failed. Is your userid correct?");
-                    break;                    
+                    break;
                 case 200:
                     log.info("login: completed {}", res);
                     // save auth token cookie to props file
