@@ -1049,6 +1049,15 @@ public class AppDeployer {
             }
 
             chunkBeans.add(new FanoutBean(hash, blobHashes, actualContentLength));
+            boolean didAdd = false;
+            try {
+                didAdd = chunkBeans.offer(new FanoutBean(hash, blobHashes, actualContentLength), 30l, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                throw new RuntimeException(ex);
+            }
+            if( !didAdd ) {
+                throw new RuntimeException("Queue is full and i waited AGES to add it");
+            }
         }
 
         @Override
@@ -1061,8 +1070,16 @@ public class AppDeployer {
             if (!local.hasFile(hash)) {
                 local.setFileFanout(hash, fanoutHashes, actualContentLength);
             }
-            fileBeans.add(new FanoutBean(hash, fanoutHashes, actualContentLength));
 
+            boolean didAdd = false;
+            try {
+                didAdd = fileBeans.offer(new FanoutBean(hash, fanoutHashes, actualContentLength), 30l, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                throw new RuntimeException(ex);
+            }
+            if( !didAdd ) {
+                throw new RuntimeException("Queue is full and i waited AGES to add it");
+            }
         }
 
         @Override
