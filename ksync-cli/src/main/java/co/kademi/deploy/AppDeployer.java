@@ -176,6 +176,10 @@ public class AppDeployer {
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
 
+    private final LinkedBlockingQueue<Runnable> queueJobs = new LinkedBlockingQueue<>(100);
+    private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+    private final ExecutorService queueExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, queueJobs, rejectedExecutionHandler);
+
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
         this.rootDir = dir;
 
@@ -831,7 +835,7 @@ public class AppDeployer {
         private Exception transferException;
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
 
         public AppDeployerBlobStore(Host host, BlobStore local, BlobStore remote, boolean bulkUpload) {
             this.host = host;
@@ -839,7 +843,7 @@ public class AppDeployer {
             this.remote = remote;
             this.bulkUpload = bulkUpload;
 
-            transferExecutor.submit(() -> {
+            queueExecutor.submit(() -> {
                 try {
                     while (running) {
                         Set<BlobImpl> toUpload = new HashSet<>();
@@ -873,12 +877,12 @@ public class AppDeployer {
             } else {
                 transferQueueCounter.up("blob");
                 transferExecutor.submit(() -> {
-                    log.info("setBlob: enqueued transfer. Count={}", transferQueueCounter.count());
+                    log.info("setBlob: start transfer. Count={}", transferQueueCounter.count());
                     long tm = System.currentTimeMillis();
                     try {
                         //System.out.println("upload " + dirHash);
                         remote.setBlob(hash, bytes);
-                        //System.out.println("done upload " + dirHash);                        
+                        //System.out.println("done upload " + dirHash);
                     } finally {
                         transferQueueCounter.down("blob");
                     }
@@ -914,6 +918,9 @@ public class AppDeployer {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
                 log.info("..waiting for blob transfers to complete. transferJobs={} remaining={}", transferJobs.size(), transferQueueCounter.count());
+                for( Runnable j : transferJobs ) {
+                    log.info("                - " + j);
+                }
                 Thread.sleep(1000);
             }
         }
@@ -983,14 +990,14 @@ public class AppDeployer {
 
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
+        private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
 
         public AppDeployerHashStore(Host host, HashStore local, HashStore remote) {
             this.host = host;
             this.local = local;
             this.remote = remote;
 
-            transferExecutor.submit(() -> {
+            queueExecutor.submit(() -> {
                 try {
                     while (running) {
 
