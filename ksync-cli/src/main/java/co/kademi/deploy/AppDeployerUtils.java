@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.text.DecimalFormat;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -41,23 +42,30 @@ public class AppDeployerUtils {
         return dest.toByteArray();
     }
 
-    public static byte[] compressBulkFanouts(Set<AppDeployer.FanoutBean> toUpload) throws Exception{
+    public static byte[] compressBulkFanouts(Set<AppDeployer.FanoutBean> toUpload) throws Exception {
         ByteArrayOutputStream dest = new ByteArrayOutputStream();
         ZipOutputStream out = new ZipOutputStream(new BufferedOutputStream(dest));
         log.info("compressBulkFanouts: fanouts to upload={}", toUpload.size());
+        Set<String> hashes = new HashSet<>();
         for (AppDeployer.FanoutBean fanout : toUpload) {
             //log.info("compressBulkFanouts: hash={}", fanout.hash);
-            ZipEntry zipEntry = new ZipEntry(fanout.hash );
+            if (!hashes.contains(fanout.hash)) {
+                hashes.add(fanout.hash);
+                ZipEntry zipEntry = new ZipEntry(fanout.hash);
 
-            out.putNextEntry(zipEntry);
-            ByteArrayOutputStream fanoutOut = new ByteArrayOutputStream();
-            FanoutSerializationUtils.writeFanout(fanout.blobHashes, fanout.actualContentLength, fanoutOut);
-            byte[] bytes = fanoutOut.toByteArray();
-            String s = new String(bytes);
-            System.out.println("compress fanout\n" + s);
-            IOUtils.write(bytes, out);
+                out.putNextEntry(zipEntry);
+                ByteArrayOutputStream fanoutOut = new ByteArrayOutputStream();
+                FanoutSerializationUtils.writeFanout(fanout.blobHashes, fanout.actualContentLength, fanoutOut);
+                byte[] bytes = fanoutOut.toByteArray();
+            //String s = new String(bytes);
+                //System.out.println("compress fanout\n" + s);
+                IOUtils.write(bytes, out);
+            } else {
+                log.info("Ignoring duplicate hash: {} length={}", fanout.hash, fanout.actualContentLength);
+            }
+
         }
-        
+
         out.flush();
         out.finish();
 
@@ -68,7 +76,7 @@ public class AppDeployerUtils {
     }
 
     private static Object formatBytes(int l) {
-        if ( l <= 0 ) {
+        if (l <= 0) {
             return "0 B";
         }
         final String[] units = new String[]{"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"};
