@@ -305,7 +305,7 @@ public class KSync3 {
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();
-        }, options, line, true);
+        }, options, line, true, false);
 
 
 //        KSyncUtils.withDir((File dir) -> {

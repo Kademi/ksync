@@ -26,7 +26,7 @@ public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
 
-    public static void withKsync(Consumer<KSync3> c, Options options, CommandLine line, boolean needsUrl) {
+    public static void withKsync(Consumer<KSync3> c, Options options, CommandLine line, boolean needsUrl, boolean background) {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
@@ -44,7 +44,7 @@ public class KSyncUtils {
             List<String> ignores = KSync3Utils.split(sIgnores);
             KSyncUtils.writeProps(url, user, configDir);
             try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, false, ignores, cookies);
+                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies);
                 c.accept(kSync3);
             } catch (Exception ex) {
                 System.out.println("Could not execute command: " + ex.getMessage());
@@ -71,7 +71,7 @@ public class KSyncUtils {
     public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) {
         withKsync((KSync3 kSync3) -> {
             c.accept(kSync3.getConfigDir(), kSync3);
-        }, options, line, false);
+        }, options, line, false, backgroundSync);
 //
 //        KSyncUtils.withDir((File dir) -> {
 //            File configDir = new File(dir, ".ksync");
