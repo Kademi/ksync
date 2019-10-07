@@ -25,7 +25,7 @@
         <dependency>
             <groupId>io.milton</groupId>
             <artifactId>milton-cloud-sync</artifactId>
-            <version>1.4.5</version>
+            <version>1.4.6</version>
             <exclusions>
                 <exclusion>
                     <groupId>voldermort</groupId>
@@ -134,6 +134,11 @@
             <artifactId>milton-client</artifactId>
             <version>2.7.4.9</version>
         </dependency>
+        <dependency>
+            <groupId>com.sleepycat</groupId>
+            <artifactId>je</artifactId>
+            <version>18.3.12</version>
+        </dependency>          
     </dependencies>
     <build>
         <plugins>
