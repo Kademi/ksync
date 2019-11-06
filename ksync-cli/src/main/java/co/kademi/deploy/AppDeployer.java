@@ -1048,7 +1048,8 @@ public class AppDeployer {
                 return;
             }
 
-            chunkBeans.add(new FanoutBean(hash, blobHashes, actualContentLength));
+
+            //chunkBeans.add(new FanoutBean(hash, blobHashes, actualContentLength));
             boolean didAdd = false;
             try {
                 didAdd = chunkBeans.offer(new FanoutBean(hash, blobHashes, actualContentLength), 30l, TimeUnit.SECONDS);
