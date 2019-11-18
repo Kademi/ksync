@@ -413,7 +413,9 @@ public class KSync3 {
         }
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
-        client.setTimeout(30000);
+        int timeout = 60000;
+        client.setTimeout(timeout);
+        System.out.println("using timeout of " + timeout + "ms");
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
         if (cookies != null) {
