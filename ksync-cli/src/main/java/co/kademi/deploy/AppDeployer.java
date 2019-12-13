@@ -180,7 +180,7 @@ public class AppDeployer {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
-        int timeout = 30000;
+        int timeout = 60000;
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
         client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
         if (cookies != null) {
@@ -443,6 +443,7 @@ public class AppDeployer {
 
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
+                    return null;
                 }
             }
 
