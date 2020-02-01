@@ -301,7 +301,12 @@ public class AppDeployer {
         boolean doesVersionExist = doesExist(appVersionPath);
 
         if (doesVersionExist) {
-            log.info("App version is already published " + appVersionPath);
+            if (force) {
+                log.info("App version is already published " + appVersionPath + " but force is on so will continue..");
+            } else {
+                log.info("App version is already published " + appVersionPath + ", so ignoring");
+                return;
+            }
 
             // Check that local and remote hashes match, and warn if they dont
             String localHash = getLocalHash(appName, versionName, appDir);
@@ -315,21 +320,11 @@ public class AppDeployer {
                 String branchPath = "/repositories/" + appName + "/" + versionName + "/";
                 String remoteHash = getRemoteHash(branchPath);
                 if (localHash.equals(remoteHash)) {
-                    if (force) {
-                        log.info("App is an exact match local and remote ={} but force is true, so push anyway", localHash);
-                    } else {
-                        log.info("App is an exact match local and remote ={}", localHash);
-                        results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
-                        return;
-                    }
+                    log.info("App is an exact match local and remote ={}", localHash);
+                    results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
+                    return;
                 } else {
-                    if (force) {
-                        log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
-                    } else {
-                        log.warn("App is not the same as published version. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
-                        results.warnings.add(appName + " version " + versionName + " is already published, but differs from local=" + localHash + " remote=" + remoteHash);
-                        return;
-                    }
+                    log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
                 }
             }
         }
@@ -1001,7 +996,7 @@ public class AppDeployer {
 
             queueProcessor = new Thread(() -> {
                 try {
-                    while (running || !chunkBeans.isEmpty() || !fileBeans.isEmpty() ) {
+                    while (running || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
 
                         log.info("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
                         boolean didNothing = true;
@@ -1049,7 +1044,6 @@ public class AppDeployer {
                 return;
             }
 
-
             //chunkBeans.add(new FanoutBean(hash, blobHashes, actualContentLength));
             boolean didAdd = false;
             try {
@@ -1057,7 +1051,7 @@ public class AppDeployer {
             } catch (InterruptedException ex) {
                 throw new RuntimeException(ex);
             }
-            if( !didAdd ) {
+            if (!didAdd) {
                 throw new RuntimeException("Queue is full and i waited AGES to add it");
             }
         }
@@ -1079,7 +1073,7 @@ public class AppDeployer {
             } catch (InterruptedException ex) {
                 throw new RuntimeException(ex);
             }
-            if( !didAdd ) {
+            if (!didAdd) {
                 throw new RuntimeException("Queue is full and i waited AGES to add it");
             }
         }
