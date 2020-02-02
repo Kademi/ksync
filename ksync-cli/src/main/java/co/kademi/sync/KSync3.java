@@ -8,7 +8,6 @@ import io.milton.http.exceptions.BadRequestException;
 import io.milton.http.exceptions.ConflictException;
 import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
-import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
 import io.milton.httpclient.HttpException;
 import io.milton.httpclient.HttpResult;
@@ -31,6 +30,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -522,7 +522,16 @@ public class KSync3 {
                     log.info("login: completed {}", res);
                     // save auth token cookie to props file
                     boolean foundCookie = false;
-                    List<String> cookies = result.getHeaderValues("Set-Cookie");
+                    List<String> cookies = new ArrayList<>();
+                    
+                    Map<String, String> headers = result.getHeaders();
+                    if(headers != null){
+                        String cookieString = headers.get("Set-Cookie");
+                        
+                        String[] cookieStrings = StringUtils.split(cookieString, "\n");
+                        cookies = Arrays.asList(cookieStrings);
+                    }
+                    //List<String> cookies = result.getHeaderValues("Set-Cookie");
                     for (String setCookie : cookies) {
                         log.info("cookies: {}", setCookie);
                         // miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
@@ -542,6 +551,7 @@ public class KSync3 {
                     }
 
                     break;
+
 
                 default:
                     log.warn("login: unhandled result code: {}", res);
@@ -567,12 +577,21 @@ public class KSync3 {
             }
         }
 
+        Map<String, String> mapHeaders = new LinkedHashMap();
+        
         Header[] respHeaders = resp.getAllHeaders();
-        List<Pair<String, String>> allHeaders = new ArrayList<>();
+        //List<Pair<String, String>> allHeaders = new ArrayList<>();
         for (Header h : respHeaders) {
-            allHeaders.add(new Pair(h.getName(), h.getValue())); // TODO: should concatenate multi-valued headers
+            //allHeaders.add(new Pair(h.getName(), h.getValue())); // TODO: should concatenate multi-valued headers
+            
+            String headerValue = mapHeaders.get(h.getName());
+            if (headerValue == null) {
+                mapHeaders.put(h.getName(), h.getValue());
+            } else {
+                mapHeaders.put(h.getName(), headerValue + ", " + h.getValue());
+            }
         }
-        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), allHeaders);
+        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapHeaders);
         return result;
     }
 
