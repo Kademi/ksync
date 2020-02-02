@@ -1040,7 +1040,7 @@ public class AppDeployer {
                 local.setChunkFanout(hash, blobHashes, actualContentLength);
             }
             if (remote.hasChunk(hash)) {
-                log.info("setChunkFanout: remote bloom filter says probably already has this chunk");
+                //log.info("setChunkFanout: remote bloom filter says probably already has this chunk");
                 return;
             }
 
