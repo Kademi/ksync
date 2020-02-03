@@ -8,6 +8,7 @@ import io.milton.http.exceptions.BadRequestException;
 import io.milton.http.exceptions.ConflictException;
 import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
+import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
 import io.milton.httpclient.HttpException;
 import io.milton.httpclient.HttpResult;
@@ -591,7 +592,11 @@ public class KSync3 {
                 mapHeaders.put(h.getName(), headerValue + ", " + h.getValue());
             }
         }
-        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapHeaders);
+        List<Pair<String, String>> mapHeaders2 = new ArrayList<>();
+        for( Map.Entry<String, String> entry : mapHeaders.entrySet() ) {
+            mapHeaders2.add(new Pair<>(entry.getKey(), entry.getValue()));
+        }
+        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapHeaders2); 
         return result;
     }
 
