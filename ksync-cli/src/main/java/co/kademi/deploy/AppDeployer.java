@@ -320,11 +320,15 @@ public class AppDeployer {
                 String branchPath = "/repositories/" + appName + "/" + versionName + "/";
                 String remoteHash = getRemoteHash(branchPath);
                 if (localHash.equals(remoteHash)) {
-                    log.info("App is an exact match local and remote ={}", localHash);
-                    results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
-                    return;
+                    if (!force) {
+                        log.info("App is an exact match local and remote ={}", localHash);
+                        results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
+                        return;
+                    } else {
+                        log.warn("App is the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
+                    }
                 } else {
-                    log.warn("App is not the same as published version, but force is true so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
+                    log.warn("App is not the same as published version so will republish. app={} version={} local={} remote={}", appName, versionName, localHash, remoteHash);
                 }
             }
         }
