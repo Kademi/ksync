@@ -524,11 +524,11 @@ public class KSync3 {
                     // save auth token cookie to props file
                     boolean foundCookie = false;
                     List<String> cookies = new ArrayList<>();
-                    
+
                     Map<String, String> headers = result.getHeaders();
-                    if(headers != null){
+                    if (headers != null) {
                         String cookieString = headers.get("Set-Cookie");
-                        
+
                         String[] cookieStrings = StringUtils.split(cookieString, "\n");
                         cookies = Arrays.asList(cookieStrings);
                     }
@@ -536,7 +536,7 @@ public class KSync3 {
                     for (String setCookie : cookies) {
                         log.info("cookies: {}", setCookie);
                         // miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
-                        // miltonUserUrlHash="735e226b-2a44-4ed1-b058-1d3385ca861d:evwTfxqg682WLKGbpGyaSz7oWDc"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
+                        // miltonUserUrlHash="YYY-XXX-YYY-ZZZ-XXX:DDDD"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
                         String[] arr = setCookie.split("\"");
                         String cookieName = arr[0];
                         if (cookieName.startsWith("miltonUserUrlHash")) {
@@ -547,12 +547,32 @@ public class KSync3 {
                             break;
                         }
                     }
-                    if(!foundCookie){
+                    if (!foundCookie) {
+                        // Now try using the format where all cookies are in one line:
+                        // miltonUserUrl=b64L3VzZXJzL2thZGVtaWJyYWQv; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT, miltonUserUrlHash="dd-dd-dd-dd-dd:ddd"; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT; HttpOnly
+                        for (String setCookie : cookies) {
+                            log.info("cookies.2: {}", setCookie);
+                            String key = "miltonUserUrlHash=\"";
+                            int pos = setCookie.indexOf(key);
+                            if( pos > 0 ) {
+                                String hash = setCookie.substring(pos+key.length());
+                                log.info("login: cookie.1: {}", hash);
+                                hash = hash.substring(0, hash.indexOf("\""));
+                                log.info("login: cookie.2: {}", hash);
+                                String userUrlHash = hash;
+                                String userUrl = "/users/" + this.client.user + "/";
+                                KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
+                                foundCookie = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!foundCookie) {
                         log.warn("Login seemed to succeed, but didnt find an authorisation cookie");
                     }
 
                     break;
-
 
                 default:
                     log.warn("login: unhandled result code: {}", res);
@@ -579,12 +599,12 @@ public class KSync3 {
         }
 
         Map<String, String> mapHeaders = new LinkedHashMap();
-        
+
         Header[] respHeaders = resp.getAllHeaders();
         //List<Pair<String, String>> allHeaders = new ArrayList<>();
         for (Header h : respHeaders) {
             //allHeaders.add(new Pair(h.getName(), h.getValue())); // TODO: should concatenate multi-valued headers
-            
+
             String headerValue = mapHeaders.get(h.getName());
             if (headerValue == null) {
                 mapHeaders.put(h.getName(), h.getValue());
@@ -593,10 +613,10 @@ public class KSync3 {
             }
         }
         List<Pair<String, String>> mapHeaders2 = new ArrayList<>();
-        for( Map.Entry<String, String> entry : mapHeaders.entrySet() ) {
+        for (Map.Entry<String, String> entry : mapHeaders.entrySet()) {
             mapHeaders2.add(new Pair<>(entry.getKey(), entry.getValue()));
         }
-        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapHeaders2); 
+        HttpResult result = new HttpResult(resp.getStatusLine().getStatusCode(), mapHeaders2);
         return result;
     }
 
