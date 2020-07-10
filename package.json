@@ -1,0 +1,15 @@
+{
+    "name": "@kademi/ksync",
+    "version": "1.0.0",
+    "description": "KSync is a file sync tool for working with Kademi",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Kademi/ksync.git"
+    },
+    "author": "Kademi (http://kademi.co)",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/Kademi/ksync/issues"
+    },
+    "homepage": "https://github.com/Kademi/ksync#readme"
+}
