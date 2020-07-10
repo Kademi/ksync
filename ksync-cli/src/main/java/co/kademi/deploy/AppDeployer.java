@@ -180,7 +180,7 @@ public class AppDeployer {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
-        int timeout = 60000;
+        int timeout = 180000;
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
         client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
         if (cookies != null) {

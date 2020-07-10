@@ -414,7 +414,7 @@ public class KSync3 {
         }
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
-        int timeout = 60000;
+        int timeout = 180000;
         client.setTimeout(timeout);
         System.out.println("using timeout of " + timeout + "ms");
         client.setUseDigestForPreemptiveAuth(false);
