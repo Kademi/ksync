@@ -237,6 +237,7 @@ public class AppDeployer {
         upSyncMarketplaceDir(new File(rootDir, "themes"), true, false);
         upSyncMarketplaceDir(new File(rootDir, "apps"), false, true);
         upSyncMarketplaceDir(new File(rootDir, "libs"), false, false);
+        upSyncMarketplaceDir(new File(rootDir, "recipes"), false, false);
 
         System.out.println("");
         System.out.println("");
