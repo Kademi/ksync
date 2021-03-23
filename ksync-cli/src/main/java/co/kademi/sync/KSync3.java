@@ -96,7 +96,7 @@ public class KSync3 {
     }
 
     public static void main(String[] arg) throws IOException {
-
+        System.out.println("Hi there!");
         String commandsSt = "";
         for (Command c : commands) {
             commandsSt += c.getName() + ",";
@@ -113,6 +113,7 @@ public class KSync3 {
         options.addOption("force", false, "Update already published apps (for publish command only)");
         options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
         options.addOption("ignore", true, "Comma seperated list of file/folder names to ignore on checkout");
+        options.addOption("auth", true, "An encrypted token from the server which provides authentication");
 
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
@@ -304,6 +305,7 @@ public class KSync3 {
     }
 
     private static void checkout(Options options, CommandLine line) {
+        System.out.println("Running checkout command..");
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();

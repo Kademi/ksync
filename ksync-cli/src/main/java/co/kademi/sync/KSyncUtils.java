@@ -30,11 +30,25 @@ public class KSyncUtils {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
-            Map cookies = KSyncUtils.getCookies(configDir);
             Properties props = KSyncUtils.readProps(configDir);
+            boolean hasAuth = false;
+            String auth = line.getOptionValue("auth");
+            if( StringUtils.isNotBlank(auth) ) {
+                if( auth.contains(",")) {
+                    String[] arr = auth.split(",");
+                    String userName = arr[0].trim();
+                    String token = arr[1].trim();
+                    String userUrl = "/users/" + userName;
+                    log.info("Auth token provided in args: userUrl={}", userUrl);
+                    writeLoginProps(userUrl, token, configDir);
+                    hasAuth = true;
+                }
+            }
+            Map cookies = KSyncUtils.getCookies(configDir);
             String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
             String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
             String pwd = null;
+
             if (cookies.isEmpty()) {
                 pwd = KSync3Utils.getPassword(line, url, user);
             } else {
@@ -162,12 +176,14 @@ public class KSyncUtils {
         props.setProperty("userUrl", userUrl);
         props.setProperty("userUrlHash", userUrlHash);
         writeProps(props, repoDir);
+        System.out.println("Saved login props to " + repoDir.getAbsolutePath());
     }
 
     public static Properties readProps(File repoDir) {
         File file = new File(repoDir, "ksync.properties");
         Properties props = new Properties();
         if (file.exists()) {
+            log.info("Reading properties from {}", file.getAbsolutePath());
             try (FileInputStream fi = new FileInputStream(file)) {
                 props.load(fi);
             } catch (FileNotFoundException ex) {
@@ -175,6 +191,8 @@ public class KSyncUtils {
             } catch (IOException ex) {
                 throw new RuntimeException(ex);
             }
+        } else {
+            log.info("Properties file doesnt exist: {}", file.getAbsolutePath());
         }
         return props;
     }
