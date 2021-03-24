@@ -206,7 +206,7 @@ public class KSyncUtils {
     public static String getLastRemoteHash(File repoDir) {
         Properties props = readProps(repoDir);
         String s = props.getProperty("remoteHash");
-        if (s.equals("null")) {
+        if ( StringUtils.isBlank(s) || s.equals("null")) {
             return null;
         }
         return s;
