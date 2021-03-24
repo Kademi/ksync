@@ -15,9 +15,12 @@ import io.milton.httpclient.HttpResult;
 import io.milton.sync.HttpBlobStore;
 import io.milton.sync.HttpBloomFilterHashCache;
 import io.milton.sync.HttpHashStore;
+import io.milton.sync.triplets.BerkeleyDbFileHashCache;
 import io.milton.sync.triplets.DeltaGenerator;
+import io.milton.sync.triplets.FileSystemWatchingService;
 import io.milton.sync.triplets.FileUpdatingMergingDeltaListener;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
+import io.milton.sync.triplets.SyncHashCache;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -28,6 +31,8 @@ import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.FileSystems;
+import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,7 +40,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
@@ -399,6 +406,9 @@ public class KSync3 {
     private final File repoDir;
     private final File configDir;
     private final List<String> ignores;
+    private final SyncHashCache fileHashCache;
+    private final FileSystemWatchingService fileSystemWatchingService;
+    private final ScheduledExecutorService scheduledExecutorService;
 
     private final List<String> errors = new ArrayList<>();
 
@@ -465,6 +475,24 @@ public class KSync3 {
 
         log.info("Init {}", localDir.getAbsolutePath());
 
+        scheduledExecutorService = Executors.newScheduledThreadPool(1);
+        final java.nio.file.Path path = FileSystems.getDefault().getPath(localDir.getAbsolutePath());
+        WatchService watchService = null;
+        try {
+            watchService = path.getFileSystem().newWatchService();
+        } catch (IOException ex) {
+            log.error("Exception initialising watch service");
+        }
+        if (watchService != null) {
+            fileSystemWatchingService = new FileSystemWatchingService(watchService, scheduledExecutorService);
+        } else {
+            fileSystemWatchingService = null;
+        }
+
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"));
+        File envDir = new File(tmpDir, "appDeployer-filecache");
+        fileHashCache = new BerkeleyDbFileHashCache(envDir);
+
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
             if (background) {
                 try {
@@ -475,7 +503,10 @@ public class KSync3 {
                     log.error("Exception in file changed event handler", ex);
                 }
             }
-        }, null, configDir, null, ignores);
+        }, null, fileSystemWatchingService, ignores, fileHashCache);
+//        MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
+//            needsPush.set(true);
+//        }, null, fileWatchService, null, fileHashCache);
 
     }
 
@@ -651,11 +682,12 @@ public class KSync3 {
         walkLocalVfs(localRootHash, httpBlobStore, httpHashStore, Path.root);
 
         // wait for threads to complete
+        log.info("Wait for push transfers to complete..");
         while (transferQueueCounter.count > 0) {
+            System.out.println(".");
             Thread.sleep(300);
-            log.info("Wait for transfers to complete..");
         }
-        log.info("transfers complete");
+        log.info("Push complete");
 
         // Now set the hash on the repo, and check for any missing objects
         Map<String, String> params = new HashMap<>();
@@ -768,13 +800,13 @@ public class KSync3 {
                         c.up();
                         transferQueueCounter.up();
                         transferExecutor.submit(() -> {
-                            log.info("Copy file chunk hash={} file={} chunk size={} to blobstore {}", hash, filePath, arr.length, destBlobStore);
+                            log.info("Upload blob for file {} with size {} bytes", filePath, arr.length);
                             destBlobStore.setBlob(hash, arr);
                             c.down();
                             transferQueueCounter.down();
-                            log.info("Finished Copy file chunk hash={}", hash);
+                            //log.info("Finished Copy file chunk hash={}", hash);
                         });
-                        log.info("queue size {}", transferJobs.size());
+                        //log.info("queue size {}", transferJobs.size());
                     }
                 }
 
@@ -782,11 +814,11 @@ public class KSync3 {
                     c.up();
                     transferQueueCounter.up();
                     transferExecutor.submit(() -> {
-                        log.info("Transfer chunk hash={} num hashes={} ", filePath, fanout.getHashes().size());
+                        log.info("Upload chunk for file {}", filePath);
                         destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                         c.down();
                         transferQueueCounter.down();
-                        log.info("Finish transfer chunk hash={} ", filePath);
+                        //log.info("Finish transfer chunk hash={} ", filePath);
                     });
 
                 }
@@ -794,17 +826,20 @@ public class KSync3 {
 
             if (!destHashStore.hasFile(fileHash)) {
                 // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-                log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
+                //log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
+                System.out.println("Waiting for transfers to complete.");
                 while (c.count > 0) {
-                    log.info("..waiting for transfers to complete. remaining={}", c.count);
+                    //log.info("..waiting for transfers to complete. remaining={}", c.count);
+                    System.out.print(".");
                     Thread.sleep(1000);
                 }
-                log.info("set file hash2");
+                System.out.println("");
+                System.out.println("Transfers completed");
+                //log.info("set file hash2");
                 transferQueueCounter.up();
                 transferExecutor.submit(() -> {
-                    log.info("Upload file hash={} hash={} ", filePath, fileHash);
+                    log.info("Upload file {} ", filePath);
                     destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
-                    log.info("Done {}", fileHash);
                     transferQueueCounter.down();
                 });
             }

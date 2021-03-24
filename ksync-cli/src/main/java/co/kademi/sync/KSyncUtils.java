@@ -183,7 +183,7 @@ public class KSyncUtils {
         File file = new File(repoDir, "ksync.properties");
         Properties props = new Properties();
         if (file.exists()) {
-            log.info("Reading properties from {}", file.getAbsolutePath());
+            //log.info("Reading properties from {}", file.getAbsolutePath());
             try (FileInputStream fi = new FileInputStream(file)) {
                 props.load(fi);
             } catch (FileNotFoundException ex) {

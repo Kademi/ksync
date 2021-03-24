@@ -21,10 +21,12 @@ import io.milton.sync.HttpBloomFilterHashCache;
 import io.milton.sync.HttpHashStore;
 import io.milton.sync.MinimalPutsBlobStore;
 import io.milton.sync.MinimalPutsHashStore;
+import io.milton.sync.triplets.BerkeleyDbFileHashCache;
 import io.milton.sync.triplets.BlockingBlobStore;
 import io.milton.sync.triplets.BlockingHashStore;
 import io.milton.sync.triplets.FileSystemWatchingService;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
+import io.milton.sync.triplets.SyncHashCache;
 import java.io.File;
 import java.io.IOException;
 import java.net.ConnectException;
@@ -175,6 +177,7 @@ public class AppDeployer {
     private boolean force;
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
+    private final SyncHashCache fileHashCache;
 
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
         this.rootDir = dir;
@@ -194,6 +197,7 @@ public class AppDeployer {
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         File localDataDir = new File(tmpDir, "appDeployer");
+        File envDir = new File(tmpDir, "appDeployer-filecache");
         log.info("Using local data dir {}", localDataDir);
 
         localBlobStore = new FileSystem2BlobStore(new File(localDataDir, "blobs"));
@@ -212,6 +216,7 @@ public class AppDeployer {
         } else {
             fileSystemWatchingService = null;
         }
+        fileHashCache = new BerkeleyDbFileHashCache(envDir);
     }
 
     public boolean isAutoIncrement() {
@@ -418,10 +423,13 @@ public class AppDeployer {
                 hashStore = new AppDeployerHashStore(client, localHashStore, mpHashStore);
             }
 
+
             AtomicBoolean needsPush = new AtomicBoolean();
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
                 needsPush.set(true);
-            }, null, null, fileWatchService, null);
+            }, null, fileWatchService, null, fileHashCache);
+
+
             String newHash = s.scan();
 
             if (blobStore instanceof BlockingBlobStore) {
@@ -811,7 +819,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, null, fileSystemWatchingService, null);
+            }, null, fileSystemWatchingService, null, fileHashCache);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);
