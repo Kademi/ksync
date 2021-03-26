@@ -423,12 +423,10 @@ public class AppDeployer {
                 hashStore = new AppDeployerHashStore(client, localHashStore, mpHashStore);
             }
 
-
             AtomicBoolean needsPush = new AtomicBoolean();
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
                 needsPush.set(true);
             }, null, fileWatchService, null, fileHashCache);
-
 
             String newHash = s.scan();
 
@@ -444,9 +442,13 @@ public class AppDeployer {
             log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
             log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
 
-            if (needsPush.get()) {
+            if (needsPush.get() || force) {
                 try {
-                    log.info("File changed in {}, new repo hash {}", localRootDir, newHash);
+                    if (needsPush.get()) {
+                        log.info("File changed in {}, new repo hash {}", localRootDir, newHash);
+                    } else {
+                        log.info("No file changes detected, but force is on so will push, repo hash {}", localRootDir, newHash);
+                    }
                     push(appName, newHash, branchPath);
 
                 } catch (Exception ex) {
@@ -469,8 +471,10 @@ public class AppDeployer {
             return;
         }
         if (remoteHash.equals(localRootHash)) {
-            log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
-            return;
+            if (!force) {
+                log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
+                return;
+            }
         }
         if (report) {
             log.info("Not doing push {} because in report mode", branchPath);
