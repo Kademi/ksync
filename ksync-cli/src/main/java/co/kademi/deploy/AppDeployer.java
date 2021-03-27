@@ -484,68 +484,30 @@ public class AppDeployer {
         // Now set the hash on the repo, and check for any missing objects
         Map<String, String> params = new HashMap<>();
         params.put("newHash", localRootHash);
-        params.put("validate", "true");
+        params.put("validate", "async");
         try {
             log.info("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
             String res = client.post(branchPath, params);
+
+            // Get the JobID to poll with
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
             if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
-                    log.info("Completed ok");
-                    return;
+                    log.info("Push async started ok");
+                    JSONObject data = (JSONObject) jsonRes.get("data");
+                    Long jobId = (Long) data.get("jobId");
+
+                    pollForPushComplete(jobId, appName, localRootHash, branchPath);
+                } else {
+                    results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + ", got negative status from async push request");
                 }
+            } else {
+                results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + ", got no status from async push request");
             }
-            System.out.println("jsonRes " + jsonRes);
-            JSONObject data = (JSONObject) jsonRes.get("data");
-            if (data != null) {
-                httpHashStore.setForce(true);
-                httpBlobStore.setForce(true);
-                JSONArray missing = (JSONArray) data.get("missingFileFanouts");
-                for (Object ff : missing.toArray()) {
-                    log.info("Missing file fanout: {}", ff);
-                    String missingHash = ff.toString();
-                    Fanout f = localHashStore.getFileFanout(missingHash);
-                    if (f == null) {
-                        log.error("Could not find locally missing file fanout: " + missingHash);
-                        return;
-                    }
-                    httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                    log.info("Uploaded missing file fanout");
-                }
 
-                // missingChunkFanouts
-                missing = (JSONArray) data.get("missingChunkFanouts");
-                for (Object ff : missing.toArray()) {
-                    log.info("Missing chunk fanout: {}", ff);
-                    String missingHash = ff.toString();
-                    Fanout f = localHashStore.getChunkFanout(missingHash);
-                    if (f == null) {
-                        log.error("Could not find locally missing chunk fanout: " + missingHash);
-                        return;
-                    }
-                    httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                    log.info("Uploaded missing chunk fanout");
-                }
 
-                // missingBlobs
-                missing = (JSONArray) data.get("missingBlobs");
-                for (Object ff : missing.toArray()) {
-                    log.info("Missing blob: {}", ff);
-                    String missingHash = ff.toString();
-                    byte[] f = localBlobStore.getBlob(missingHash);
-                    if (f == null) {
-                        log.error("Could not find locally missing blob: " + missingHash);
-                        return;
-                    }
-                    httpBlobStore.setBlob(missingHash, f);
-                    log.info("Uploaded missing blob");
-                }
-
-            }
-            log.info("Push failed: But missing objects have been uploaded so will try again :)", res);
-            push(appName, localRootHash, branchPath);
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
@@ -829,6 +791,86 @@ public class AppDeployer {
             log.error("Could not find local hash for " + localRootDir, ex);
             return null;
         }
+    }
+
+    private void pollForPushComplete(Long jobId, String appName, String localRootHash, String branchPath) {
+        Map<String, String> params = new HashMap<>();
+        params.put("newHash", localRootHash);
+        params.put("validate", "async");
+        try {
+            log.info("PUSH Local: {}", localRootHash);
+            String res = client.post(branchPath, params);
+            // response can either be in-progress, or completed. If completed will have missing objects in data
+            
+
+
+            processPushResponse(res, appName, localRootHash, branchPath);
+
+        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
+            results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private void processPushResponse(String res, String appName, String localRootHash, String branchPath) {
+        JSONObject jsonRes = JSONObject.fromObject(res);
+        Object statusOb = jsonRes.get("status");
+        if (statusOb != null) {
+            Boolean st = (Boolean) statusOb;
+            if (st) {
+                log.info("Completed ok");
+                return;
+            }
+        }
+
+        JSONObject data = (JSONObject) jsonRes.get("data");
+        if (data != null) {
+            httpHashStore.setForce(true);
+            httpBlobStore.setForce(true);
+            JSONArray missing = (JSONArray) data.get("missingFileFanouts");
+            for (Object ff : missing.toArray()) {
+                log.info("Missing file fanout: {}", ff);
+                String missingHash = ff.toString();
+                Fanout f = localHashStore.getFileFanout(missingHash);
+                if (f == null) {
+                    log.error("Could not find locally missing file fanout: " + missingHash);
+                    return;
+                }
+                httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
+                log.info("Uploaded missing file fanout");
+            }
+
+            // missingChunkFanouts
+            missing = (JSONArray) data.get("missingChunkFanouts");
+            for (Object ff : missing.toArray()) {
+                log.info("Missing chunk fanout: {}", ff);
+                String missingHash = ff.toString();
+                Fanout f = localHashStore.getChunkFanout(missingHash);
+                if (f == null) {
+                    log.error("Could not find locally missing chunk fanout: " + missingHash);
+                    return;
+                }
+                httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
+                log.info("Uploaded missing chunk fanout");
+            }
+
+            // missingBlobs
+            missing = (JSONArray) data.get("missingBlobs");
+            for (Object ff : missing.toArray()) {
+                log.info("Missing blob: {}", ff);
+                String missingHash = ff.toString();
+                byte[] f = localBlobStore.getBlob(missingHash);
+                if (f == null) {
+                    log.error("Could not find locally missing blob: " + missingHash);
+                    return;
+                }
+                httpBlobStore.setBlob(missingHash, f);
+                log.info("Uploaded missing blob");
+            }
+
+        }
+        log.info("Push failed: But missing objects have been uploaded so will try again :)", res);
+        push(appName, localRootHash, branchPath);
     }
 
     public class AppDeployerBlobStore implements BlockingBlobStore {
