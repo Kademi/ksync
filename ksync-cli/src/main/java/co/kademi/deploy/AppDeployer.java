@@ -51,8 +51,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -128,7 +126,7 @@ public class AppDeployer {
                 System.out.println("Dir not found: " + dir.getAbsolutePath());
                 return;
             }
-            log.info("Current directory: " + dir.getAbsolutePath());
+
             File configDir = new File(dir, ".ksync");
             Map cookies = KSyncUtils.getCookies(configDir);
             String url = KSync3Utils.getInput(options, line, "url", null);
@@ -152,6 +150,7 @@ public class AppDeployer {
                 log.info("  -autoincrement: " + d.autoIncrement);
                 log.info("  -report: " + d.report);
                 log.info("  -force: " + d.force);
+                log.info("  -appIds: " + appIds);
                 log.info("--------------");
                 d.upsync();
             } catch (Exception ex) {
@@ -813,7 +812,7 @@ public class AppDeployer {
                 } else if (pollRes.isCompleted()) {
                     done = true;
                 } else {
-                    if (sleepyTime < 500) {
+                    if (sleepyTime < 1500) {
                         sleepyTime += 10;
                     }
                     try {
@@ -823,8 +822,10 @@ public class AppDeployer {
                     }
                 }
             }
-
-            processPushResponse(pollRes.getJobOutput(), appName, localRootHash, branchPath);
+            if (pollRes == null) {
+                throw new RuntimeException("Couldnt get a poll result");
+            }
+            processPushResponse(pollRes.getJobOutput(), appName, localRootHash, branchPath, jobId);
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
@@ -832,59 +833,70 @@ public class AppDeployer {
         }
     }
 
-    private void processPushResponse(String res, String appName, String localRootHash, String branchPath) {
-        
-        MIGHT BE EMPTY .. means its valid
+    private void processPushResponse(String res, String appName, String localRootHash, String branchPath, Long jobId) {
+
         JSONObject jsonRes = JSONObject.fromObject(res);
 
         JSONObject data = jsonRes;
         if (data != null) {
-            httpHashStore.setForce(true);
-            httpBlobStore.setForce(true);
-            JSONArray missing = (JSONArray) data.get("missingFileFanouts");
-            for (Object ff : missing.toArray()) {
-                log.info("Missing file fanout: {}", ff);
-                String missingHash = ff.toString();
-                Fanout f = localHashStore.getFileFanout(missingHash);
-                if (f == null) {
-                    log.error("Could not find locally missing file fanout: " + missingHash);
-                    return;
-                }
-                httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                log.info("Uploaded missing file fanout");
-            }
+            JSONArray missingFileFanouts = getArray(data, "missingFileFanouts");    // if empty returns null
+            JSONArray missingChunkFanouts = getArray(data, "missingChunkFanouts");
+            JSONArray missingBlobs = getArray(data, "missingBlobs");
 
-            // missingChunkFanouts
-            missing = (JSONArray) data.get("missingChunkFanouts");
-            for (Object ff : missing.toArray()) {
-                log.info("Missing chunk fanout: {}", ff);
-                String missingHash = ff.toString();
-                Fanout f = localHashStore.getChunkFanout(missingHash);
-                if (f == null) {
-                    log.error("Could not find locally missing chunk fanout: " + missingHash);
-                    return;
+            if (missingBlobs != null || missingChunkFanouts != null || missingFileFanouts != null) {
+                log.info("processPushResponse: missing objects, will upload individually");
+                int count = 0;
+                httpHashStore.setForce(true);
+                httpBlobStore.setForce(true);
+                if (missingFileFanouts != null) {
+                    for (Object ff : missingFileFanouts.toArray()) {
+                        log.info("Missing file fanout: {}", ff);
+                        String missingHash = ff.toString();
+                        Fanout f = localHashStore.getFileFanout(missingHash);
+                        if (f == null) {
+                            throw new RuntimeException("Could not find locally missing file fanout: " + missingHash);
+                        }
+                        count++;
+                        httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
+                        log.info("Uploaded missing file fanout");
+                    }
                 }
-                httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                log.info("Uploaded missing chunk fanout");
-            }
 
-            // missingBlobs
-            missing = (JSONArray) data.get("missingBlobs");
-            for (Object ff : missing.toArray()) {
-                log.info("Missing blob: {}", ff);
-                String missingHash = ff.toString();
-                byte[] f = localBlobStore.getBlob(missingHash);
-                if (f == null) {
-                    log.error("Could not find locally missing blob: " + missingHash);
-                    return;
+                if (missingChunkFanouts != null) {
+                    for (Object ff : missingChunkFanouts.toArray()) {
+                        log.info("Missing chunk fanout: {}", ff);
+                        String missingHash = ff.toString();
+                        Fanout f = localHashStore.getChunkFanout(missingHash);
+                        if (f == null) {
+                            throw new RuntimeException("Could not find locally missing chunk fanout: " + missingHash);
+                        }
+                        count++;
+                        httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
+                        log.info("Uploaded missing chunk fanout");
+                    }
                 }
-                httpBlobStore.setBlob(missingHash, f);
-                log.info("Uploaded missing blob");
-            }
 
+                // missingBlobs
+                if (missingBlobs != null) {
+                    for (Object ff : missingBlobs.toArray()) {
+                        log.info("Missing blob: {}", ff);
+                        String missingHash = ff.toString();
+                        byte[] f = localBlobStore.getBlob(missingHash);
+                        if (f == null) {
+                            throw new RuntimeException("Could not find locally missing blob: " + missingHash);
+                        }
+                        httpBlobStore.setBlob(missingHash, f);
+                        count++;
+                        log.info("Uploaded missing blob");
+                    }
+                }
+                log.info("Push failed: But uploaded " + count + "missing objects have been uploaded so will try again :)", res);
+                push(appName, localRootHash, branchPath);
+                return ;
+            }
         }
-        log.info("Push failed: But missing objects have been uploaded so will try again :)", res);
-        push(appName, localRootHash, branchPath);
+
+        log.info("Push and verify job {} complete, no missing objects, repository {} has been updated", jobId, appName);
     }
 
     private PollJobResult parseJson(String res) {
@@ -920,6 +932,16 @@ public class AppDeployer {
             String s = v.toString();
             return Long.parseLong(s);
         }
+    }
+
+    private JSONArray getArray(JSONObject data, String name) {
+        if (data.containsKey(name)) {
+            JSONArray arr = (JSONArray) data.get(name);
+            if (arr.size() > 0) {
+                return arr;
+            }
+        }
+        return null;
     }
 
     public class PollJobResult {
