@@ -51,6 +51,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.cli.CommandLine;
@@ -197,7 +199,11 @@ public class AppDeployer {
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         File localDataDir = new File(tmpDir, "appDeployer");
-        File envDir = new File(tmpDir, "appDeployer-filecache");
+        String dataDirName = "appDeployer-filecache-" + client.server;
+        if (StringUtils.isNotBlank(user)) {
+            dataDirName += "-" + user;
+        }
+        File envDir = new File(tmpDir, dataDirName);
         log.info("Using local data dir {}", localDataDir);
 
         localBlobStore = new FileSystem2BlobStore(new File(localDataDir, "blobs"));
@@ -497,7 +503,7 @@ public class AppDeployer {
                 if (st) {
                     log.info("Push async started ok");
                     JSONObject data = (JSONObject) jsonRes.get("data");
-                    Long jobId = (Long) data.get("jobId");
+                    Long jobId = asLong(data.get("jobId"));
 
                     pollForPushComplete(jobId, appName, localRootHash, branchPath);
                 } else {
@@ -506,8 +512,6 @@ public class AppDeployer {
             } else {
                 results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + ", got no status from async push request");
             }
-
-
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
@@ -795,16 +799,32 @@ public class AppDeployer {
 
     private void pollForPushComplete(Long jobId, String appName, String localRootHash, String branchPath) {
         Map<String, String> params = new HashMap<>();
-        params.put("newHash", localRootHash);
-        params.put("validate", "async");
+        long sleepyTime = 100;
+        PollJobResult pollRes = null;
         try {
             log.info("PUSH Local: {}", localRootHash);
-            String res = client.post(branchPath, params);
-            // response can either be in-progress, or completed. If completed will have missing objects in data
-            
+            boolean done = false;
+            while (!done) {
+                byte[] bytes = client.get("/tasks/?jobId=" + jobId + "&asJson"); // response can either be in-progress, or completed. If completed will have missing objects in data
+                String res = new String(bytes);
+                pollRes = parseJson(res);
+                if (pollRes.isCancelled()) {
+                    throw new RuntimeException("Verify and push task was cancelled: " + jobId);
+                } else if (pollRes.isCompleted()) {
+                    done = true;
+                } else {
+                    if (sleepyTime < 500) {
+                        sleepyTime += 10;
+                    }
+                    try {
+                        Thread.sleep(sleepyTime);
+                    } catch (InterruptedException ex) {
+                        throw new RuntimeException("Interrupted", ex);
+                    }
+                }
+            }
 
-
-            processPushResponse(res, appName, localRootHash, branchPath);
+            processPushResponse(pollRes.getJobOutput(), appName, localRootHash, branchPath);
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             results.errors.add(appName + " - EXCEPTION: Failed to push to " + branchPath + " because " + ex.getMessage());
@@ -813,17 +833,11 @@ public class AppDeployer {
     }
 
     private void processPushResponse(String res, String appName, String localRootHash, String branchPath) {
+        
+        MIGHT BE EMPTY .. means its valid
         JSONObject jsonRes = JSONObject.fromObject(res);
-        Object statusOb = jsonRes.get("status");
-        if (statusOb != null) {
-            Boolean st = (Boolean) statusOb;
-            if (st) {
-                log.info("Completed ok");
-                return;
-            }
-        }
 
-        JSONObject data = (JSONObject) jsonRes.get("data");
+        JSONObject data = jsonRes;
         if (data != null) {
             httpHashStore.setForce(true);
             httpBlobStore.setForce(true);
@@ -871,6 +885,67 @@ public class AppDeployer {
         }
         log.info("Push failed: But missing objects have been uploaded so will try again :)", res);
         push(appName, localRootHash, branchPath);
+    }
+
+    private PollJobResult parseJson(String res) {
+        JSONObject jsonRes = JSONObject.fromObject(res);
+        boolean completed = asBool(jsonRes.get("completed"));
+        boolean cancelled = asBool(jsonRes.get("cancelled"));
+        String jobOutput = null;
+        if (jsonRes.has("jobOutput")) {
+            jobOutput = jsonRes.getString("jobOutput");
+        }
+        return new PollJobResult(completed, cancelled, jobOutput);
+
+    }
+
+    private boolean asBool(Object ob) {
+        if (ob == null) {
+            return false;
+        } else {
+            return Boolean.parseBoolean(ob.toString());
+        }
+    }
+
+    private Long asLong(Object v) {
+        if (v == null) {
+            return null;
+        } else if (v instanceof Integer) {
+            Integer i = (Integer) v;
+            return i.longValue();
+        } else if (v instanceof Long) {
+            Long l = (Long) v;
+            return l;
+        } else {
+            String s = v.toString();
+            return Long.parseLong(s);
+        }
+    }
+
+    public class PollJobResult {
+
+        private boolean completed;
+        private boolean cancelled;
+        private String jobOutput;
+
+        public PollJobResult(boolean completed, boolean cancelled, String jobOutput) {
+            this.completed = completed;
+            this.cancelled = cancelled;
+            this.jobOutput = jobOutput;
+        }
+
+        public boolean isCancelled() {
+            return cancelled;
+        }
+
+        public boolean isCompleted() {
+            return completed;
+        }
+
+        public String getJobOutput() {
+            return jobOutput;
+        }
+
     }
 
     public class AppDeployerBlobStore implements BlockingBlobStore {
