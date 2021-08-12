@@ -490,7 +490,7 @@ public class KSync3 {
         }
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
-        File envDir = new File(tmpDir, "appDeployer-filecache");
+        File envDir = new File(tmpDir, "appDeployer-filecache-" + System.currentTimeMillis());
         fileHashCache = new BerkeleyDbFileHashCache(envDir);
 
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
