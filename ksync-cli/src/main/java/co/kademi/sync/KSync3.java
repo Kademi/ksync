@@ -587,8 +587,8 @@ public class KSync3 {
                             log.info("cookies.2: {}", setCookie);
                             String key = "miltonUserUrlHash=\"";
                             int pos = setCookie.indexOf(key);
-                            if( pos > 0 ) {
-                                String hash = setCookie.substring(pos+key.length());
+                            if (pos > 0) {
+                                String hash = setCookie.substring(pos + key.length());
                                 log.info("login: cookie.1: {}", hash);
                                 hash = hash.substring(0, hash.indexOf("\""));
                                 log.info("login: cookie.2: {}", hash);
@@ -717,20 +717,35 @@ public class KSync3 {
             KSyncUtils.processHashes(missingBlobsArr, (String hash) -> {
                 byte[] arr = localBlobStore.getBlob(hash);
                 log.info("Upload missing blob {} size={} to blobstore={}", hash, arr.length, httpBlobStore);
-                httpBlobStore.setBlob(hash, arr);
+                try {
+                    httpBlobStore.setForce(true);
+                    httpBlobStore.setBlob(hash, arr);
+                } finally {
+                    httpBlobStore.setForce(false);
+                }
             });
 
             KSyncUtils.processHashes(missingChunksArr, (String hash) -> {
                 log.info("Upload missing chunk fanout {}", hash);
                 Fanout fanout = localHashStore.getChunkFanout(hash);
-                httpHashStore.setChunkFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
+                try {
+                    httpHashStore.setForce(true);
+                    httpHashStore.setChunkFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
+                } finally {
+                    httpHashStore.setForce(false);
+                }
             });
 
             JSONArray missingFileFanoutsArr = (JSONArray) data.get("missingFileFanouts");
             KSyncUtils.processHashes(missingFileFanoutsArr, (String hash) -> {
                 log.info("Upload missing file fanout {}", hash);
                 Fanout fanout = localHashStore.getFileFanout(hash);
-                httpHashStore.setFileFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
+                try {
+                    httpHashStore.setForce(true);
+                    httpHashStore.setFileFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
+                } finally {
+                    httpHashStore.setForce(false);
+                }
             });
 
             push(localRootHash, configDir);
