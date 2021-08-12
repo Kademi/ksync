@@ -715,8 +715,8 @@ public class KSync3 {
 
             JSONArray missingBlobsArr = (JSONArray) data.get("missingBlobs");
             KSyncUtils.processHashes(missingBlobsArr, (String hash) -> {
-                log.info("Upload missing blob {}", hash);
                 byte[] arr = localBlobStore.getBlob(hash);
+                log.info("Upload missing blob {} size={} to blobstore={}", hash, arr.length, httpBlobStore);
                 httpBlobStore.setBlob(hash, arr);
             });
 
