@@ -804,7 +804,9 @@ public class AppDeployer {
             log.info("PUSH Local: {}", localRootHash);
             boolean done = false;
             while (!done) {
-                byte[] bytes = client.get("/tasks/?jobId=" + jobId + "&asJson"); // response can either be in-progress, or completed. If completed will have missing objects in data
+                String url = "/tasks/?jobId=" + jobId + "&asJson";
+                log.info("poll for push result {} ...", url);
+                byte[] bytes = client.get(url); // response can either be in-progress, or completed. If completed will have missing objects in data
                 String res = new String(bytes);
                 pollRes = parseJson(res);
                 if (pollRes.isCancelled()) {
