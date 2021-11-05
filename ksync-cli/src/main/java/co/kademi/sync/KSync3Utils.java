@@ -1,11 +1,9 @@
 package co.kademi.sync;
 
-import static co.kademi.deploy.AppDeployer.DEFAULT_VERSION;
+import static co.kademi.sync.KSyncUtils.readProps;
 import java.io.Console;
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
@@ -128,4 +126,43 @@ public class KSync3Utils {
         return false;
     }
 
+    public static void writeCheckoutProps(Options options, CommandLine line) {
+
+        System.out.println("Writing properties..");
+        KSyncUtils.withDir((File dir) -> {
+            String url = KSync3Utils.getInput(options, line, "url", null);
+            String user = "";
+            String token = "";
+            String userUrl = "";
+            String auth = line.getOptionValue("auth");
+            if( StringUtils.isNotBlank(auth) ) {
+                if( auth.contains(",")) {
+                    String[] arr = auth.split(",");
+                    user = arr[0].trim();
+                    token = arr[1].trim();
+                    userUrl = "/users/" + user;
+                }
+            }
+            File repoDir = new File(dir, ".ksync");
+            repoDir.mkdirs();
+
+            Properties props = readProps(repoDir);
+            if (StringUtils.isNotBlank(url)) {
+                props.put("url", url);
+            }
+            if (StringUtils.isNotBlank(user)) {
+                props.put("user", user);
+            }
+            if (StringUtils.isNotBlank(token)) {
+                props.put("userUrlHash", token);
+            }
+            if (StringUtils.isNotBlank(userUrl)) {
+                props.put("userUrl", userUrl);
+            }
+            
+            KSyncUtils.writeProps(props, repoDir);
+
+        }, options);
+
+    }
 }

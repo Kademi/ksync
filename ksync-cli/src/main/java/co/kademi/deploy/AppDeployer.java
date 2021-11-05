@@ -130,6 +130,7 @@ public class AppDeployer {
             File configDir = new File(dir, ".ksync");
             Map cookies = KSyncUtils.getCookies(configDir);
             String url = KSync3Utils.getInput(options, line, "url", null);
+            log.info(url);
             String user = KSync3Utils.getInput(options, line, "user", null);
             String password = null;
             if (cookies.isEmpty()) {

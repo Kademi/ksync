@@ -313,6 +313,9 @@ public class KSync3 {
 
     private static void checkout(Options options, CommandLine line) {
         System.out.println("Running checkout command..");
+        
+        KSync3Utils.writeCheckoutProps(options, line);
+        
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();

@@ -48,7 +48,6 @@ public class KSyncUtils {
             String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
             String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
             String pwd = null;
-
             if (cookies.isEmpty()) {
                 pwd = KSync3Utils.getPassword(line, url, user);
             } else {
