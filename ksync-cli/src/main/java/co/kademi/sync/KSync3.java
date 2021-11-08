@@ -163,6 +163,7 @@ public class KSync3 {
     private final ExecutorService fileTransferExecutor = new ThreadPoolExecutor(20, 20, 60, TimeUnit.SECONDS, fileDownloadQueue);
     private final List<Future> fileDownloadFutures = new ArrayList<>();
 
+
     public interface Command {
 
         String getName();
@@ -478,7 +479,7 @@ public class KSync3 {
         }
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
-        File envDir = new File(tmpDir, "appDeployer-filecache-" + System.currentTimeMillis());
+        File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(sRemoteAddress));
         fileHashCache = new BerkeleyDbFileHashCache(envDir);
 
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {

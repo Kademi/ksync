@@ -17,6 +17,17 @@ import org.apache.commons.lang3.StringUtils;
  */
 public class KSync3Utils {
 
+    public static String makeFileName(String url) {
+        String fname = url.replace("/", "-");
+        fname = fname.replace("https", "");
+        fname = fname.replace("http", "");
+        fname = fname.replace(":8080", "");
+        fname = fname.replace(":80", "");
+        fname = fname.replace(":", "");
+        return fname;
+    }
+
+
     public static KSync3.Command findCommand(CommandLine line, List<KSync3.Command> commands) {
         String cmd = line.getOptionValue("command");
         for (KSync3.Command c : commands) {
