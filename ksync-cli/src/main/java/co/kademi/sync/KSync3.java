@@ -313,34 +313,12 @@ public class KSync3 {
 
     private static void checkout(Options options, CommandLine line) {
         System.out.println("Running checkout command..");
-        
-        KSync3Utils.writeCheckoutProps(options, line);
-        
+
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();
         }, options, line, true, false);
 
-//        KSyncUtils.withDir((File dir) -> {
-//            String url = KSync3Utils.getInput(options, line, "url", null);
-//            String user = KSync3Utils.getInput(options, line, "user", null);
-//            String pwd = KSync3Utils.getPassword(line, url, user);
-//
-//
-//            File repoDir = new File(dir, ".ksync");
-//            repoDir.mkdirs();
-//            KSyncUtils.writeProps(url, user, repoDir);
-//            Map cookies = KSyncUtils.getCookies(repoDir);
-//            try {
-//                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, ignores, cookies);
-//                kSync3.checkout(repoDir, ignores);
-//                kSync3.showErrors();
-//            } catch (IOException ex) {
-//                System.out.println("Could not checkout: " + ex.getMessage());
-//
-//            }
-//
-//        }, options);
     }
 
     private static void commit(Options options, CommandLine line) {

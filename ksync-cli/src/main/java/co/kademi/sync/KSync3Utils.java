@@ -1,6 +1,5 @@
 package co.kademi.sync;
 
-import static co.kademi.sync.KSyncUtils.readProps;
 import java.io.Console;
 import java.io.File;
 import java.util.ArrayList;
@@ -46,6 +45,13 @@ public class KSync3Utils {
     }
 
     public static String getInput(Options options, CommandLine line, String optionName, Properties props, boolean promptIfNotPresent) {
+        // always take value from command line if present
+        String cmdLineVal = line.getOptionValue(optionName);
+        if (StringUtils.isNotBlank(cmdLineVal)) {
+            return cmdLineVal;
+        }
+
+        // Then try the properties file..
         if (props != null && props.containsKey(optionName)) {
             String s = props.getProperty(optionName);
             if (StringUtils.isNotBlank(s)) {
@@ -56,19 +62,19 @@ public class KSync3Utils {
         if (!promptIfNotPresent) {
             return null;
         }
-        String s = line.getOptionValue(optionName);
-        if (StringUtils.isBlank(s)) {
-            Option opt = options.getOption(optionName);
-            Console con = System.console();
-            if (con != null) {
-                s = con.readLine("Please enter " + optionName + " - " + opt.getDescription() + ": ");
-            } else {
-                Scanner scanner = new Scanner(System.in);
-                System.out.println("Please enter " + optionName + " - " + opt.getDescription() + ": ");
-                s = scanner.nextLine();
-            }
+
+        // No value on command line or in props file, and promptIfNotPresent is enabled so ask the user
+        Option opt = options.getOption(optionName);
+        Console con = System.console();
+        if (con != null) {
+            cmdLineVal = con.readLine("Please enter " + optionName + " - " + opt.getDescription() + ": ");
+        } else {
+            Scanner scanner = new Scanner(System.in);
+            System.out.println("Please enter " + optionName + " - " + opt.getDescription() + ": ");
+            cmdLineVal = scanner.nextLine();
         }
-        return s;
+
+        return cmdLineVal;
     }
 
     public static String getPassword(CommandLine line, String user, String url) {
@@ -124,45 +130,5 @@ public class KSync3Utils {
             }
         }
         return false;
-    }
-
-    public static void writeCheckoutProps(Options options, CommandLine line) {
-
-        System.out.println("Writing properties..");
-        KSyncUtils.withDir((File dir) -> {
-            String url = KSync3Utils.getInput(options, line, "url", null);
-            String user = "";
-            String token = "";
-            String userUrl = "";
-            String auth = line.getOptionValue("auth");
-            if( StringUtils.isNotBlank(auth) ) {
-                if( auth.contains(",")) {
-                    String[] arr = auth.split(",");
-                    user = arr[0].trim();
-                    token = arr[1].trim();
-                    userUrl = "/users/" + user;
-                }
-            }
-            File repoDir = new File(dir, ".ksync");
-            repoDir.mkdirs();
-
-            Properties props = readProps(repoDir);
-            if (StringUtils.isNotBlank(url)) {
-                props.put("url", url);
-            }
-            if (StringUtils.isNotBlank(user)) {
-                props.put("user", user);
-            }
-            if (StringUtils.isNotBlank(token)) {
-                props.put("userUrlHash", token);
-            }
-            if (StringUtils.isNotBlank(userUrl)) {
-                props.put("userUrl", userUrl);
-            }
-            
-            KSyncUtils.writeProps(props, repoDir);
-
-        }, options);
-
     }
 }

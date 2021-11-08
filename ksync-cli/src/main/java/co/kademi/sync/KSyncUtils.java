@@ -33,8 +33,8 @@ public class KSyncUtils {
             Properties props = KSyncUtils.readProps(configDir);
             boolean hasAuth = false;
             String auth = line.getOptionValue("auth");
-            if( StringUtils.isNotBlank(auth) ) {
-                if( auth.contains(",")) {
+            if (StringUtils.isNotBlank(auth)) {
+                if (auth.contains(",")) {
                     String[] arr = auth.split(",");
                     String userName = arr[0].trim();
                     String token = arr[1].trim();
@@ -151,6 +151,10 @@ public class KSyncUtils {
     public static void writeProps(String url, String user, File repoDir) {
         Properties props = readProps(repoDir);
         if (StringUtils.isNotBlank(url)) {
+            String oldUrl = props.getProperty("url");
+            if (oldUrl != null && !oldUrl.equals(url)) {
+                props.remove("remoteHash"); // no longer valid if url is changing
+            }
             props.put("url", url);
         }
         if (StringUtils.isNotBlank(user)) {
@@ -205,7 +209,7 @@ public class KSyncUtils {
     public static String getLastRemoteHash(File repoDir) {
         Properties props = readProps(repoDir);
         String s = props.getProperty("remoteHash");
-        if ( StringUtils.isBlank(s) || s.equals("null")) {
+        if (StringUtils.isBlank(s) || s.equals("null")) {
             return null;
         }
         return s;
