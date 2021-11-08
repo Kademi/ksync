@@ -39,8 +39,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -155,6 +158,10 @@ public class KSync3 {
             System.out.println("----------------------");
         }
     }
+
+    private final BlockingQueue<Runnable> fileDownloadQueue = new ArrayBlockingQueue<>(10000); // used for checkout command
+    private final ExecutorService fileTransferExecutor = new ThreadPoolExecutor(20, 20, 60, TimeUnit.SECONDS, fileDownloadQueue);
+    private final List<Future> fileDownloadFutures = new ArrayList<>();
 
     public interface Command {
 
@@ -779,7 +786,7 @@ public class KSync3 {
         if (destHashStore.hasFile(fileHash)) {
             return;
         }
-        log.info("Copy file {}", filePath);
+        //log.info("Copy file {}", filePath);
         Fanout ff = null;
         try {
             ff = sourceHashStore.getFileFanout(fileHash);
@@ -796,7 +803,7 @@ public class KSync3 {
                         c.up();
                         transferQueueCounter.up();
                         transferExecutor.submit(() -> {
-                            log.info("Upload blob for file {} with size {} bytes", filePath, arr.length);
+                            log.info("transfer blob for file {} with size {} bytes", filePath, arr.length);
                             destBlobStore.setBlob(hash, arr);
                             c.down();
                             transferQueueCounter.down();
@@ -810,7 +817,7 @@ public class KSync3 {
                     c.up();
                     transferQueueCounter.up();
                     transferExecutor.submit(() -> {
-                        log.info("Upload chunk for file {}", filePath);
+                        log.info("Transfer chunk for file {}", filePath);
                         destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                         c.down();
                         transferQueueCounter.down();
@@ -829,12 +836,12 @@ public class KSync3 {
                     System.out.print(".");
                     Thread.sleep(1000);
                 }
-                System.out.println("");
-                System.out.println("Transfers completed");
+                //System.out.println("");
+                //System.out.println("Transfers completed");
                 //log.info("set file hash2");
                 transferQueueCounter.up();
                 transferExecutor.submit(() -> {
-                    log.info("Upload file {} ", filePath);
+                    //log.info("Upload file {} ", filePath);
                     destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
                     transferQueueCounter.down();
                 });
@@ -911,7 +918,17 @@ public class KSync3 {
      * @param hash
      */
     private void fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
-        _fetch(filePath, hash, ignores);
+        try {
+            startFileDownloads();
+            _fetch(filePath, hash, ignores);
+            log.info("waiting for file downloads to finish..");
+            while (!areDownloadsFinished()) {
+                Thread.sleep(500);
+                System.out.print(".");
+            }
+        } finally {
+            stopFileDownloads();
+        }
         log.info("fetch finished");
     }
 
@@ -931,11 +948,50 @@ public class KSync3 {
                     if (t.getType().equals("d")) {
                         _fetch(filePath.child(t.getName()), t.getHash(), ignores);
                     } else {
-                        combineToLocal(filePath.child(t.getName()), t.getHash());
+                        enqueueFileDownload(filePath.child(t.getName()), t.getHash());
+                        //combineToLocal(filePath.child(t.getName()), t.getHash());
                     }
                 }
             }
         }
+    }
+
+    private boolean areDownloadsFinished() {
+        if( !fileDownloadQueue.isEmpty() ) {
+            return false;
+        }
+        for( Future f : fileDownloadFutures) {
+            if( !f.isDone() ) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void enqueueFileDownload(Path filePath, String hash) {
+        //fileDownloadQueue.add(hash);
+
+        Future<?> f = fileTransferExecutor.submit(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    combineToLocal(Path.root, hash);
+                } catch (InterruptedException ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        });
+        if (f != null) {
+            fileDownloadFutures.add(f);
+        }
+    }
+
+    private void startFileDownloads() {
+        fileDownloadFutures.clear();
+    }
+
+    private void stopFileDownloads() {
+        fileDownloadFutures.clear();
     }
 
     private List<ITriplet> getTriplets(String hash, BlobStore blobStore) {

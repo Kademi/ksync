@@ -10,7 +10,7 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/nanoid-lib/2.1.2/ -user admin</exec.args>
+                <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/admin-lib/8.8.0/ -user admin</exec.args>
                 <exec.executable>java</exec.executable>
                 <exec.workingdir>/home/brad/ksynctest</exec.workingdir>
             </properties>
@@ -25,7 +25,7 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-agentlib:jdwp=transport=dt_socket,server=n,address=${jpda.address} -classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/nanoid-lib/2.1.2/ -user admin</exec.args>
+                <exec.args>-agentlib:jdwp=transport=dt_socket,server=n,address=${jpda.address} -classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/admin-lib/8.8.0/ -user admin</exec.args>
                 <exec.executable>java</exec.executable>
                 <jpda.listen>true</jpda.listen>
                 <exec.workingdir>/home/brad/ksynctest</exec.workingdir>
@@ -41,7 +41,7 @@
                 <goal>org.codehaus.mojo:exec-maven-plugin:1.2.1:exec</goal>
             </goals>
             <properties>
-                <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/nanoid-lib/2.1.2/ -user admin</exec.args>
+                <exec.args>-classpath %classpath co.kademi.sync.KSync3 -command checkout -url http://localhost:8080/repositories/admin-lib/8.8.0/ -user admin</exec.args>
                 <exec.executable>java</exec.executable>
                 <exec.workingdir>/home/brad/ksynctest</exec.workingdir>
             </properties>
