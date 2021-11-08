@@ -158,6 +158,10 @@ public class KSyncUtils {
             props.put("url", url);
         }
         if (StringUtils.isNotBlank(user)) {
+            String oldUser = props.getProperty("user");
+            if (oldUser != null && !oldUser.equals(user)) {
+                props.remove("userUrlHash"); // no longer valid if url is changing
+            }
             props.put("user", user);
         }
         writeProps(props, repoDir);
