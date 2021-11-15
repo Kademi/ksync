@@ -1,8 +1,8 @@
 package co.kademi.sync;
 
-import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
-import java.util.Base64;
+import org.apache.commons.codec.binary.Base64;
 
 /**
  * This class is for accepting ksync:// uri schema and call the ksync3 to execute commands
@@ -28,11 +28,13 @@ public class KSyncUri {
         }
         //ksync://LWNvbW1hbmQgc3luYw==
         String encoded = URI.replace("ksync://", "");
-        
-        //decoding base64
-        Base64.Decoder decoder = Base64.getDecoder();  
-        String strCommands = new String(decoder.decode(encoded));  
-        
+        String strCommands = "";
+        byte[] decoded = Base64.decodeBase64(encoded);
+        try{
+            strCommands = new String(decoded, "UTF-8");
+        }catch(UnsupportedEncodingException e) {
+            System.out.println("Decode error" + e.getMessage());
+        }
         
         //parsing decoded string to array of args
         String[] arrCommands = strCommands.split(" ");
