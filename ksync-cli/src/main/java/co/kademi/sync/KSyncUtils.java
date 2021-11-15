@@ -28,7 +28,12 @@ public class KSyncUtils {
 
     public static void withKsync(Consumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background) {
         KSyncUtils.withDir((File dir) -> {
-            File configDir = new File(dir, ".ksync");
+            File configDir;
+            if(KSyncUri.isIsUriSchema()) {
+                configDir = new File(KSyncUri.getAppDir(), ".ksync");
+            } else {
+                configDir = new File(dir, ".ksync");
+            }
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
             boolean hasAuth = false;
