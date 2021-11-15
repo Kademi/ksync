@@ -419,12 +419,7 @@ public class KSync3 {
     private final List<String> errors = new ArrayList<>();
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
-        
-        if(KSyncUri.isIsUriSchema()) {
-            localDir = KSyncUri.getAppDir();
-        }
-        
-        this.localDir =  localDir;
+        this.localDir = localDir;
         this.configDir = configDir;
         this.ignores = ignores;
         eventManager = new EventManagerImpl();
@@ -507,7 +502,7 @@ public class KSync3 {
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
             if (background) {
                 try {
-                    //log.info("File changed in {}, new repo hash {}", localDir, rootHash);
+                    log.info("File changed in {}, new repo hash {}", localDir, rootHash);
                     push(rootHash, configDir);
 
                 } catch (Exception ex) {
