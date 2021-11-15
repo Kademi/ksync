@@ -106,6 +106,24 @@ public class KSync3 {
     }
 
     public static void main(String[] arg) throws IOException {
+        
+        // Check how many arguments were passed in
+        if(arg == null || arg.length == 0)
+        {
+            System.out.println("Cannot find any arguments. Please provide argumetns to ksync3.jar");
+            System.exit(0);
+        }
+       
+        if(KSyncUri.isUri(arg)) {
+            System.out.println("KSync3: Found URI Schema, parsing arguments");
+            arg = KSyncUri.getURIArguments(arg);
+        }
+        
+        KSync3.handleKSync(arg);
+
+    }
+    
+    private static void handleKSync(String[] arg) {
         System.out.println("Hi there!");
         String commandsSt = "";
         for (Command c : commands) {
@@ -146,7 +164,6 @@ public class KSync3 {
         cmd.execute(options, line);
 
         System.exit(0); // threads arent shutting down
-
     }
 
     private void showErrors() {
