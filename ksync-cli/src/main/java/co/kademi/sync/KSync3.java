@@ -142,8 +142,8 @@ public class KSync3 {
         options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
         options.addOption("ignore", true, "Comma seperated list of file/folder names to ignore on checkout");
         options.addOption("auth", true, "An encrypted token from the server which provides authentication");
-        options.addOption("appname", true, "app name for creating folder in users directory");
-        options.addOption("isuri", true, "defines whether ksync was executed from an URI schema or from terminal");
+        options.addOption("appname", true, "app name for creating folder in app directory");
+        options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
         try {

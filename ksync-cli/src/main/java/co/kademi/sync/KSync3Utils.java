@@ -106,13 +106,12 @@ public class KSync3Utils {
 
     public static String getOrCreateAppDirectory(CommandLine line) {
         String curDir = System.getProperty("user.dir");
-        String isKSync = line.getOptionValue("isuri");
-        if(isKSync != null && isKSync.equals("true")) {
-            curDir = System.getProperty("user.home");                
+        String appDir = line.getOptionValue("appdir");
+        if(StringUtils.isNotEmpty(appDir)) {
+            curDir = appDir;                
         }
         String s = line.getOptionValue("appname");
-
-        if(isKSync.equals("true") && StringUtils.isEmpty(s)) {
+        if(StringUtils.isNotEmpty(appDir) && StringUtils.isEmpty(s)) {
             System.out.println("KSync3: appname option is required when using Ksync uri");
             System.exit(0);
         }
