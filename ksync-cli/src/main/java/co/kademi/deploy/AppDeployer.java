@@ -120,7 +120,7 @@ public class AppDeployer {
         return result + part;
     }
 
-    public static void publish(Options options, CommandLine line) {
+    public static void publish(Options options, CommandLine line, boolean isKSyncUri) {
         KSyncUtils.withDir((File dir) -> {
             if (!dir.exists()) {
                 System.out.println("Dir not found: " + dir.getAbsolutePath());
@@ -159,7 +159,7 @@ public class AppDeployer {
             }
 
             log.info("Completed");
-        }, options);
+        }, options, line, isKSyncUri);
         System.exit(0);
     }
 

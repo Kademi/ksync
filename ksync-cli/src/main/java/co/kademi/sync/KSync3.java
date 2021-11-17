@@ -105,7 +105,7 @@ public class KSync3 {
         commands.add(new LoginCommand());
     }
 
-    public static void main(String[] arg) throws IOException {
+    public static void main(String[] arg) {
         
         // Check how many arguments were passed in
         if(arg == null || arg.length == 0)
@@ -113,17 +113,19 @@ public class KSync3 {
             System.out.println("Cannot find any arguments. Please provide argumetns to ksync3.jar");
             System.exit(0);
         }
-       
+        
+        boolean isKSyncUri = false;
         if(KSyncUri.isUri(arg)) {
             System.out.println("KSync3: Found URI Schema, parsing arguments");
-            arg = KSyncUri.getURIArguments(arg);
+            isKSyncUri = true;
+            arg = KSyncUri.parseArguments(arg);
         }
         
-        KSync3.handleKSync(arg);
+        KSync3.handleKSync(arg, isKSyncUri);
 
     }
     
-    private static void handleKSync(String[] arg) {
+    private static void handleKSync(String[] arg, boolean isKSyncUri) {
         System.out.println("Hi there!");
         String commandsSt = "";
         for (Command c : commands) {
@@ -142,7 +144,7 @@ public class KSync3 {
         options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
         options.addOption("ignore", true, "Comma seperated list of file/folder names to ignore on checkout");
         options.addOption("auth", true, "An encrypted token from the server which provides authentication");
-
+        options.addOption("appname", true, "app name for creating folder in users directory");
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
         try {
@@ -161,7 +163,7 @@ public class KSync3 {
             return;
         }
 
-        cmd.execute(options, line);
+        cmd.execute(options, line, isKSyncUri);
 
         System.exit(0); // threads arent shutting down
     }
@@ -185,7 +187,7 @@ public class KSync3 {
 
         String getName();
 
-        void execute(Options options, CommandLine line);
+        void execute(Options options, CommandLine line, boolean isKSyncUri);
     }
 
     public static class CheckoutCommand implements Command {
@@ -196,8 +198,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            checkout(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            checkout(options, line, isKSyncUri);
         }
 
     }
@@ -210,7 +212,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
             showUsage(options);
         }
 
@@ -224,8 +226,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            commit(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            commit(options, line, isKSyncUri);
         }
 
     }
@@ -238,8 +240,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            pull(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            pull(options, line, isKSyncUri);
         }
 
     }
@@ -252,8 +254,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            push(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            push(options, line, isKSyncUri);
         }
 
     }
@@ -266,8 +268,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            sync(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            sync(options, line, isKSyncUri);
             boolean done = false;
             while (!done) {
                 try {
@@ -289,9 +291,9 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
             try {
-                AppDeployer.publish(options, line);
+                AppDeployer.publish(options, line, isKSyncUri);
             } catch (Exception ex) {
                 log.error("Invalie URL", ex);
             }
@@ -306,8 +308,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            login(options, line);
+        public void execute(Options options, CommandLine line, boolean isKSyncUri) {
+            login(options, line, isKSyncUri);
         }
     }
 
@@ -315,8 +317,9 @@ public class KSync3 {
         HelpFormatter formatter = new HelpFormatter();
         formatter.printHelp("ksync3", options);
     }
-
-    private static void login(Options options, CommandLine line) {
+    
+    
+    private static void login(Options options, CommandLine line, boolean isKSyncUri) {
         KSyncUtils.withDir((File dir) -> {
             String url = KSync3Utils.getInput(options, line, "url", null);
             String user = KSync3Utils.getInput(options, line, "user", null);
@@ -331,40 +334,40 @@ public class KSync3 {
                 e.printStackTrace();
             }
 
-        }, options);
+        }, options, line, isKSyncUri);
 
         System.exit(0);
     }
 
-    private static void checkout(Options options, CommandLine line) {
+    private static void checkout(Options options, CommandLine line, boolean isKSyncUri) {
         System.out.println("Running checkout command..");
 
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();
-        }, options, line, true, false);
+        }, options, line, true, false, isKSyncUri);
 
     }
 
-    private static void commit(Options options, CommandLine line) {
+    private static void commit(Options options, CommandLine line, boolean isKSyncUri) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.commit();
             k.showErrors();
-        }, line, options, false);
+        }, line, options, false, isKSyncUri);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void push(Options options, CommandLine line) {
+    private static void push(Options options, CommandLine line, boolean isKSyncUri) {
         log.info("push");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.info("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
-        }, line, options, false);
+        }, line, options, false, isKSyncUri);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void sync(Options options, CommandLine line) {
+    private static void sync(Options options, CommandLine line, boolean isKSyncUri) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.start();
@@ -372,12 +375,12 @@ public class KSync3 {
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        }, line, options, true);
+        }, line, options, true, isKSyncUri);
         System.out.println("finished initial scan");
 
     }
 
-    private static void pull(Options options, CommandLine line) {
+    private static void pull(Options options, CommandLine line, boolean isKSyncUri) {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
@@ -385,7 +388,7 @@ public class KSync3 {
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        }, line, options, false);
+        }, line, options, false, isKSyncUri);
         System.out.println("finished");
         System.exit(0); // threads arent shutting down
     }

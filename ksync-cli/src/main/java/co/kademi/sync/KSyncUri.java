@@ -16,16 +16,18 @@ public class KSyncUri {
      * @return 
      */
     public static boolean isUri(String[] args) {
-        String URI = args[0];
-        return URI.startsWith("ksync://");
+        String arg = args[0];
+        return arg.startsWith("ksync://");
     }
     
-    public static String[] getURIArguments(String[] args) {
+    public static String[] parseArguments(String[] args) {
+        
         String URI = args[0];
         if(!URI.contains("ksync://")) {
             System.out.println("Invalid argument. Usage: ksync://<encoded string>");
             System.exit(0);
         }
+        
         //ksync://LWNvbW1hbmQgc3luYw==
         String encoded = URI.replace("ksync://", "");
         String strCommands = "";
@@ -49,5 +51,5 @@ public class KSyncUri {
         arguments = listArgs.toArray(arguments);
                 
         return arguments;
-    }
+    }    
 }
