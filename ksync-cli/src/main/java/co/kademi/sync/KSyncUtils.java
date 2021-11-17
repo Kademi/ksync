@@ -26,7 +26,7 @@ public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
 
-    public static void withKsync(Consumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background, boolean isKSyncUri) {
+    public static void withKsync(Consumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background) {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
@@ -63,11 +63,11 @@ public class KSyncUtils {
                 System.out.println("Could not execute command: " + ex.getMessage());
                 ex.printStackTrace();
             }
-        }, options, line, isKSyncUri);
+        }, options, line);
     }
 
-    public static void withDir(Consumer<File> s, Options options, CommandLine line, boolean isKSyncUri) {
-        String curDir = KSync3Utils.getOrCreateAppDirectory(line, isKSyncUri);
+    public static void withDir(Consumer<File> s, Options options, CommandLine line) {
+        String curDir = KSync3Utils.getOrCreateAppDirectory(line);
         File dir = new File(curDir);
 
         if (!dir.exists()) {
@@ -81,10 +81,10 @@ public class KSyncUtils {
         }
     }
 
-    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync, boolean isKSyncUri) {
+    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) {
         withKsync((KSync3 kSync3) -> {
             c.accept(kSync3.getConfigDir(), kSync3);
-        }, options, line, false, backgroundSync, isKSyncUri);
+        }, options, line, false, backgroundSync);
 //
 //        KSyncUtils.withDir((File dir) -> {
 //            File configDir = new File(dir, ".ksync");

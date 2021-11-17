@@ -18,7 +18,7 @@ public class KSyncUri {
     public static boolean isUri(String[] args) {
         String arg = args[0];
         return arg.startsWith("ksync://");
-    }
+    } 
     
     public static String[] parseArguments(String[] args) {
         
@@ -46,6 +46,9 @@ public class KSyncUri {
                 listArgs.add(arrCommand);
             }
         }
+        
+        listArgs.add("-isuri");
+        listArgs.add("true");
         
         String[] arguments = new String[listArgs.size()];
         arguments = listArgs.toArray(arguments);
