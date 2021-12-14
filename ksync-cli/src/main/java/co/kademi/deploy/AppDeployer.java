@@ -5,6 +5,7 @@ package co.kademi.deploy;
 
 import co.kademi.sync.KSync3Utils;
 import co.kademi.sync.KSyncUtils;
+import static co.kademi.sync.KSyncUtils.writeLoginProps;
 import io.milton.common.Path;
 import io.milton.event.EventManagerImpl;
 import io.milton.http.exceptions.BadRequestException;
@@ -41,6 +42,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -128,16 +130,32 @@ public class AppDeployer {
             }
 
             File configDir = new File(dir, ".ksync");
+            configDir.mkdirs();
+            Properties props = KSyncUtils.readProps(configDir);
+
+            String auth = line.getOptionValue("auth");
+            if (StringUtils.isNotBlank(auth)) {
+                if (auth.contains(",")) {
+                    String[] arr = auth.split(",");
+                    String userName = arr[0].trim();
+                    String token = arr[1].trim();
+                    String userUrl = "/users/" + userName;
+                    log.info("Auth token provided in args: userUrl={}", userUrl);
+                    writeLoginProps(userUrl, token, configDir);
+                    props = KSyncUtils.readProps(configDir);
+                }
+            }
+
             Map cookies = KSyncUtils.getCookies(configDir);
-            String url = KSync3Utils.getInput(options, line, "url", null);
+            String url = KSync3Utils.getInput(options, line, "url", props, true);
             log.info(url);
-            String user = KSync3Utils.getInput(options, line, "user", null);
+            String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
             String password = null;
             if (cookies.isEmpty()) {
                 password = KSync3Utils.getPassword(line, user, url);
             }
             String appIds = KSync3Utils.getInput(options, line, "appids", null);
-
+            
             AppDeployer d = null;
             try {
                 d = new AppDeployer(dir, url, user, password, appIds, cookies);
@@ -895,7 +913,7 @@ public class AppDeployer {
                 }
                 log.info("Push failed: But uploaded " + count + "missing objects have been uploaded so will try again :)", res);
                 push(appName, localRootHash, branchPath);
-                return ;
+                return;
             }
         }
 
