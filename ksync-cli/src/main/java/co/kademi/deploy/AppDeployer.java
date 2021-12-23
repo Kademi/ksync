@@ -140,7 +140,6 @@ public class AppDeployer {
                     String userName = arr[0].trim();
                     String token = arr[1].trim();
                     String userUrl = "/users/" + userName;
-                    log.info("Auth token provided in args: userUrl={}", userUrl);
                     writeLoginProps(userUrl, token, configDir);
                     props = KSyncUtils.readProps(configDir);
                 }
