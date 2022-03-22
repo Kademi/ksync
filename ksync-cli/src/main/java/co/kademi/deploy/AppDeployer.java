@@ -171,6 +171,10 @@ public class AppDeployer {
                 log.info("  -appIds: " + appIds);
                 log.info("--------------");
                 d.upsync();
+                
+                if (!d.results.errors.isEmpty()) {
+                    System.exit(1);
+                }
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
