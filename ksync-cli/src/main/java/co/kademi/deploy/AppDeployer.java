@@ -154,13 +154,17 @@ public class AppDeployer {
                 password = KSync3Utils.getPassword(line, user, url);
             }
             String appIds = KSync3Utils.getInput(options, line, "appids", null);
-            
+
+            String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
+            List<String> ignores = KSync3Utils.split(sIgnores);
+
             AppDeployer d = null;
             try {
                 d = new AppDeployer(dir, url, user, password, appIds, cookies);
                 d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
                 d.force = KSync3Utils.getBooleanInput(line, "force");
                 d.report = KSync3Utils.getBooleanInput(line, "report");
+                d.ignores = ignores;
 
                 log.info("---- OPTIONS ----");
                 log.info("url: " + url);
@@ -171,7 +175,7 @@ public class AppDeployer {
                 log.info("  -appIds: " + appIds);
                 log.info("--------------");
                 d.upsync();
-                
+
                 if (!d.results.errors.isEmpty()) {
                     System.exit(1);
                 }
@@ -198,6 +202,7 @@ public class AppDeployer {
     private boolean autoIncrement = false; // if true, update version numbers in files
     private boolean report; // if true, dont make any changes
     private boolean force;
+    private List<String> ignores;
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
     private final SyncHashCache fileHashCache;
@@ -366,7 +371,7 @@ public class AppDeployer {
             }
         }
 
-        String localHash = upSyncMarketplaceVersionDir(appName, versionName, isTheme, isApp, appDir, fileWatchService);
+        String localHash = upSyncMarketplaceVersionDir(appName, versionName, appDir, fileWatchService);
         if (localHash != null) {
 
             if (appCreated) {
@@ -412,10 +417,10 @@ public class AppDeployer {
 
     }
 
-    private String upSyncMarketplaceVersionDir(String appName, String versionName, boolean theme, boolean app, File localRootDir, FileSystemWatchingService fileWatchService) {
+    private String upSyncMarketplaceVersionDir(String appName, String versionName, File localRootDir, FileSystemWatchingService fileWatchService) {
         log.info("upSyncMarketplaceVersionDir app={}", appName);
         try {
-            if (!checkCreateAppVersion(appName, versionName, theme, app)) {
+            if (!checkCreateAppVersion(appName, versionName)) {
                 return null;
             }
 
@@ -453,7 +458,7 @@ public class AppDeployer {
             AtomicBoolean needsPush = new AtomicBoolean();
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
                 needsPush.set(true);
-            }, null, fileWatchService, null, fileHashCache);
+            }, null, fileWatchService, ignores, fileHashCache);
 
             String newHash = s.scan();
 
@@ -550,8 +555,7 @@ public class AppDeployer {
         }
     }
 
-    private boolean checkCreateAppVersion(String appName, String versionName, boolean theme, boolean app) throws NotAuthorizedException, UnknownHostException, SocketTimeoutException, IOException, ConnectException, HttpException {
-
+    private boolean checkCreateAppVersion(String appName, String versionName) throws NotAuthorizedException, UnknownHostException, SocketTimeoutException, IOException, ConnectException, HttpException {
         // Now check for the version
         String appBasPath = "/repositories/" + appName + "/";
         String versionPath = appBasPath + versionName;
@@ -810,7 +814,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, fileSystemWatchingService, null, fileHashCache);
+            }, null, fileSystemWatchingService, ignores, fileHashCache);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);
@@ -858,7 +862,6 @@ public class AppDeployer {
     }
 
     private void processPushResponse(String res, String appName, String localRootHash, String branchPath, Long jobId) {
-
         JSONObject jsonRes = JSONObject.fromObject(res);
 
         JSONObject data = jsonRes;
