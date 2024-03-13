@@ -173,6 +173,7 @@ public class AppDeployer {
                 log.info("  -report: " + d.report);
                 log.info("  -force: " + d.force);
                 log.info("  -appIds: " + appIds);
+                log.info("  -ignore: " + ignores);
                 log.info("--------------");
                 d.upsync();
 
