@@ -439,6 +439,7 @@ public class KSync3 {
 
         HttpBloomFilterHashCache blobsHashCache = null;
         try {
+            log.info("Fetching Blobs Bloom Filter...");
             blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
         } catch (Exception e) {
             log.warn("Unable to load blobs bloom filter, so things will be a bit slow: ", e);
@@ -446,6 +447,7 @@ public class KSync3 {
 
         HttpBloomFilterHashCache chunckFanoutHashCache = null;
         try {
+            log.info("Fetching Chunks Bloom Filter...");
             chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
         } catch (Exception e) {
             log.warn("Unable to load chunks bloom filter, so things will be a bit slow ", e);
@@ -453,6 +455,7 @@ public class KSync3 {
 
         HttpBloomFilterHashCache fileFanoutHashCache = null;
         try {
+            log.info("Fetching Files Bloom Filter...");
             fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
         } catch (Exception e) {
             log.warn("Unable to load files bloom filter, so things will be a bit slow", e);
