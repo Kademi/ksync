@@ -106,25 +106,23 @@ public class KSync3 {
     }
 
     public static void main(String[] arg) {
-        
+
         // Check how many arguments were passed in
-        if(arg == null || arg.length == 0)
-        {
+        if (arg == null || arg.length == 0) {
             System.out.println("Cannot find any arguments. Please provide argumetns to ksync3.jar");
             System.exit(0);
         }
-        
-        if(KSyncUri.isUri(arg)) {
+
+        if (KSyncUri.isUri(arg)) {
             System.out.println("KSync3: Found URI Schema, parsing arguments");
             arg = KSyncUri.parseArguments(arg);
         }
-        
+
         KSync3.handleKSync(arg);
 
     }
-    
+
     private static void handleKSync(String[] arg) {
-        System.out.println("Hi there!");
         String commandsSt = "";
         for (Command c : commands) {
             commandsSt += c.getName() + ",";
@@ -151,7 +149,8 @@ public class KSync3 {
             line = parser.parse(options, arg);
         } catch (Exception exp) {
             // oops, something went wrong
-            System.err.println("Parsing failed.  Reason: " + exp.getMessage());
+            log.error("Parsing failed.  Reason: " + exp.getMessage());
+            System.exit(1);
             return;
         }
 
@@ -162,7 +161,12 @@ public class KSync3 {
             return;
         }
 
-        cmd.execute(options, line);
+        try {
+            cmd.execute(options, line);
+        } catch (Exception ex) {
+            log.error("Exception running command {} - {}", cmd.getName(), ex.getMessage(), ex);
+            System.exit(1);
+        }
 
         System.exit(0); // threads arent shutting down
     }
@@ -177,16 +181,15 @@ public class KSync3 {
         }
     }
 
-    private final BlockingQueue<Runnable> fileDownloadQueue = new ArrayBlockingQueue<>(10000); // used for checkout command
+    private final BlockingQueue<Runnable> fileDownloadQueue = new ArrayBlockingQueue<>(100000); // used for checkout command
     private final ExecutorService fileTransferExecutor = new ThreadPoolExecutor(20, 20, 60, TimeUnit.SECONDS, fileDownloadQueue);
     private final List<Future> fileDownloadFutures = new ArrayList<>();
-
 
     public interface Command {
 
         String getName();
 
-        void execute(Options options, CommandLine line);
+        void execute(Options options, CommandLine line) throws Exception;
     }
 
     public static class CheckoutCommand implements Command {
@@ -197,7 +200,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             checkout(options, line);
         }
 
@@ -225,7 +228,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             commit(options, line);
         }
 
@@ -239,7 +242,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             pull(options, line);
         }
 
@@ -253,7 +256,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             push(options, line);
         }
 
@@ -267,7 +270,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             sync(options, line);
             boolean done = false;
             while (!done) {
@@ -277,7 +280,6 @@ public class KSync3 {
                     done = true;
                 }
             }
-            System.exit(0); // threads arent shutting down
         }
 
     }
@@ -290,12 +292,8 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
-            try {
-                AppDeployer.publish(options, line);
-            } catch (Exception ex) {
-                log.error("Invalie URL", ex);
-            }
+        public void execute(Options options, CommandLine line) throws Exception {
+            AppDeployer.publish(options, line);
         }
     }
 
@@ -307,7 +305,7 @@ public class KSync3 {
         }
 
         @Override
-        public void execute(Options options, CommandLine line) {
+        public void execute(Options options, CommandLine line) throws Exception {
             login(options, line);
         }
     }
@@ -316,30 +314,22 @@ public class KSync3 {
         HelpFormatter formatter = new HelpFormatter();
         formatter.printHelp("ksync3", options);
     }
-    
-    
-    private static void login(Options options, CommandLine line) {
+
+    private static void login(Options options, CommandLine line) throws Exception {
+        log.info("Running login command..");
         KSyncUtils.withDir((File dir) -> {
             String url = KSync3Utils.getInput(options, line, "url", null);
             String user = KSync3Utils.getInput(options, line, "user", null);
             String pwd = KSync3Utils.getPassword(line, url, user);
 
             File repoDir = new File(dir, ".ksync");
-            try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
-                kSync3.login(null);
-            } catch (Exception e) {
-                System.out.println("Exception occured");
-                e.printStackTrace();
-            }
-
+            KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
+            kSync3.login(null);
         }, options, line);
-
-        System.exit(0);
     }
 
-    private static void checkout(Options options, CommandLine line) {
-        System.out.println("Running checkout command..");
+    private static void checkout(Options options, CommandLine line) throws Exception {
+        log.info("Running checkout command..");
 
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
@@ -348,7 +338,7 @@ public class KSync3 {
 
     }
 
-    private static void commit(Options options, CommandLine line) {
+    private static void commit(Options options, CommandLine line) throws Exception {
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.commit();
             k.showErrors();
@@ -356,8 +346,8 @@ public class KSync3 {
         System.exit(0); // threads arent shutting down
     }
 
-    private static void push(Options options, CommandLine line) {
-        log.info("push");
+    private static void push(Options options, CommandLine line) throws Exception {
+        log.info("Running push command..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.info("do push {}", configDir);
             k.push(configDir);
@@ -366,20 +356,18 @@ public class KSync3 {
         System.exit(0); // threads arent shutting down
     }
 
-    private static void sync(Options options, CommandLine line) {
+    private static void sync(Options options, CommandLine line) throws Exception {
+        log.info("Running sync command..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
-            try {
-                k.start();
-                k.showErrors();
-            } catch (IOException ex) {
-                log.error("ex", ex);
-            }
+            k.start();
+            k.showErrors();
         }, line, options, true);
         System.out.println("finished initial scan");
 
     }
 
-    private static void pull(Options options, CommandLine line) {
+    private static void pull(Options options, CommandLine line) throws Exception {
+        log.info("Running pull command..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
@@ -408,7 +396,7 @@ public class KSync3 {
     private final String branchPath;
     private final Counter transferQueueCounter = new Counter();
 
-    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
+    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(1000);
     private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
     private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
     private final File repoDir;
@@ -425,8 +413,11 @@ public class KSync3 {
         this.configDir = configDir;
         this.ignores = ignores;
         eventManager = new EventManagerImpl();
+
+        int timeout = 180000;
         URL url = new URL(sRemoteAddress);
-        client = new Host(url.getHost(), url.getPort(), user, pwd, null);
+        client = new Host(url.getHost(), null, url.getPort(), user, pwd, null, timeout, null, null);
+
         if (cookies != null && cookies.isEmpty()) {
             client.setUsePreemptiveAuth(true);
         } else {
@@ -434,9 +425,8 @@ public class KSync3 {
         }
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
-        int timeout = 180000;
         client.setTimeout(timeout);
-        System.out.println("using timeout of " + timeout + "ms");
+        log.info("Using timeout of " + timeout + "ms");
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
         if (cookies != null) {
@@ -451,24 +441,21 @@ public class KSync3 {
         try {
             blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
         } catch (Exception e) {
-            log.warn("Unable to load blobs bloom filter, so things will be a bit slow: " + e);
-            //log.error("exception", e);
+            log.warn("Unable to load blobs bloom filter, so things will be a bit slow: ", e);
         }
 
         HttpBloomFilterHashCache chunckFanoutHashCache = null;
         try {
             chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
         } catch (Exception e) {
-            log.warn("Unable to load chunks bloom filter, so things will be a bit slow " + e);
-            //log.error("exception", e);
+            log.warn("Unable to load chunks bloom filter, so things will be a bit slow ", e);
         }
 
         HttpBloomFilterHashCache fileFanoutHashCache = null;
         try {
             fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
         } catch (Exception e) {
-            log.warn("Unable to load files bloom filter, so things will be a bit slow");
-            //log.error("exception", e);
+            log.warn("Unable to load files bloom filter, so things will be a bit slow", e);
         }
 
         httpBlobStore = new HttpBlobStore(client, blobsHashCache);
@@ -489,7 +476,7 @@ public class KSync3 {
         try {
             watchService = path.getFileSystem().newWatchService();
         } catch (IOException ex) {
-            log.error("Exception initialising watch service");
+            log.error("Exception initialising watch service", ex);
         }
         if (watchService != null) {
             fileSystemWatchingService = new FileSystemWatchingService(watchService, scheduledExecutorService);
@@ -692,7 +679,6 @@ public class KSync3 {
         // wait for threads to complete
         log.info("Wait for push transfers to complete..");
         while (transferQueueCounter.count > 0) {
-            System.out.println(".");
             Thread.sleep(300);
         }
         log.info("Push complete");
@@ -850,13 +836,14 @@ public class KSync3 {
             if (!destHashStore.hasFile(fileHash)) {
                 // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
                 //log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
-                System.out.println("Waiting for transfers to complete.");
+                log.info("Waiting for transfers to complete");
+                // System.out.println("INFO  co.kademi.sync.KSync3  - Waiting for transfers to complete.");
                 while (c.count > 0) {
                     //log.info("..waiting for transfers to complete. remaining={}", c.count);
-                    System.out.print(".");
+                    // System.out.print(".");
                     Thread.sleep(1000);
                 }
-                //System.out.println("");
+                // System.out.println("");
                 //System.out.println("Transfers completed");
                 //log.info("set file hash2");
                 transferQueueCounter.up();
@@ -870,7 +857,6 @@ public class KSync3 {
             String errMsg = "Could not retrieve file " + filePath + " because " + e.getMessage();
             errors.add(errMsg);
             log.error(errMsg, e);
-            return;
         }
     }
 
@@ -941,10 +927,9 @@ public class KSync3 {
         try {
             startFileDownloads();
             _fetch(filePath, hash, ignores);
-            log.info("waiting for file downloads to finish..");
+            log.info("Waiting for file downloads to finish.");
             while (!areDownloadsFinished()) {
                 Thread.sleep(500);
-                System.out.print(".");
             }
         } finally {
             stopFileDownloads();
@@ -977,11 +962,11 @@ public class KSync3 {
     }
 
     private boolean areDownloadsFinished() {
-        if( !fileDownloadQueue.isEmpty() ) {
+        if (!fileDownloadQueue.isEmpty()) {
             return false;
         }
-        for( Future f : fileDownloadFutures) {
-            if( !f.isDone() ) {
+        for (Future f : fileDownloadFutures) {
+            if (!f.isDone()) {
                 return false;
             }
         }
@@ -990,15 +975,11 @@ public class KSync3 {
 
     private void enqueueFileDownload(Path filePath, String hash) {
         //fileDownloadQueue.add(hash);
-
-        Future<?> f = fileTransferExecutor.submit(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    combineToLocal(Path.root, hash);
-                } catch (InterruptedException ex) {
-                    throw new RuntimeException(ex);
-                }
+        Future<?> f = fileTransferExecutor.submit(() -> {
+            try {
+                combineToLocal(Path.root, hash);
+            } catch (InterruptedException ex) {
+                throw new RuntimeException(ex);
             }
         });
         if (f != null) {

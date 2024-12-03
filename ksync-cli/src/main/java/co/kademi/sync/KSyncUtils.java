@@ -26,12 +26,12 @@ public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
 
-    public static void withKsync(Consumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background) {
+    public static void withKsync(CheckedConsumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background) throws Exception {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
-            boolean hasAuth = false;
+
             String auth = line.getOptionValue("auth");
             if (StringUtils.isNotBlank(auth)) {
                 if (auth.contains(",")) {
@@ -41,7 +41,6 @@ public class KSyncUtils {
                     String userUrl = "/users/" + userName;
                     log.info("Auth token provided in args: userUrl={}", userUrl);
                     writeLoginProps(userUrl, token, configDir);
-                    hasAuth = true;
                 }
             }
             Map cookies = KSyncUtils.getCookies(configDir);
@@ -56,17 +55,13 @@ public class KSyncUtils {
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
             List<String> ignores = KSync3Utils.split(sIgnores);
             KSyncUtils.writeProps(url, user, configDir);
-            try {
-                KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies);
-                command.accept(kSync3);
-            } catch (Exception ex) {
-                System.out.println("Could not execute command: " + ex.getMessage());
-                ex.printStackTrace();
-            }
+
+            KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies);
+            command.accept(kSync3);
         }, options, line);
     }
 
-    public static void withDir(Consumer<File> s, Options options, CommandLine line) {
+    public static void withDir(CheckedConsumer<File> s, Options options, CommandLine line) throws Exception {
         String curDir = KSync3Utils.getOrCreateAppDirectory(line);
         File dir = new File(curDir);
 
@@ -81,7 +76,7 @@ public class KSyncUtils {
         }
     }
 
-    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) {
+    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) throws Exception {
         withKsync((KSync3 kSync3) -> {
             c.accept(kSync3.getConfigDir(), kSync3);
         }, options, line, false, backgroundSync);
@@ -143,9 +138,10 @@ public class KSyncUtils {
         return map;
     }
 
+    @FunctionalInterface
     public interface KSyncCommand {
 
-        void accept(File configDir, KSync3 k);
+        void accept(File configDir, KSync3 k) throws Exception;
     }
 
     public static void writeProps(String url, String user, File repoDir) {

@@ -122,7 +122,9 @@ public class AppDeployer {
         return result + part;
     }
 
-    public static void publish(Options options, CommandLine line) {
+    public static void publish(Options options, CommandLine line) throws Exception {
+        log.info("Running publish command..");
+
         KSyncUtils.withDir((File dir) -> {
             if (!dir.exists()) {
                 System.out.println("Dir not found: " + dir.getAbsolutePath());
@@ -158,7 +160,7 @@ public class AppDeployer {
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
             List<String> ignores = KSync3Utils.split(sIgnores);
 
-            AppDeployer d = null;
+            AppDeployer d;
             try {
                 d = new AppDeployer(dir, url, user, password, appIds, cookies);
                 d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
@@ -186,7 +188,6 @@ public class AppDeployer {
 
             log.info("Completed");
         }, options, line);
-        System.exit(0);
     }
 
     private final File rootDir;
