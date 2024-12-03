@@ -9,7 +9,7 @@
     <groupId>co.kademi</groupId>
     <artifactId>kademi-sync</artifactId>
     <packaging>jar</packaging>
-    <version>1.8.5</version>
+    <version>1.8.6</version>
     <dependencies>
         <dependency>
             <groupId>hashsplit4j</groupId>
