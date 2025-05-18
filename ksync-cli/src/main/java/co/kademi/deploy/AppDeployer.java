@@ -87,7 +87,7 @@ public class AppDeployer {
 
             // Check for app-version.txt
             if (versionFile.exists()) {
-                String version = FileUtils.readFileToString(appDir, Charset.defaultCharset());
+                String version = FileUtils.readFileToString(versionFile, Charset.defaultCharset());
                 if (StringUtils.isNotBlank(version)) {
                     version = StringUtils.trim(version);
 
