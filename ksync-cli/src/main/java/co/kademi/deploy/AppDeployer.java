@@ -29,12 +29,14 @@ import io.milton.sync.triplets.FileSystemWatchingService;
 import io.milton.sync.triplets.MemoryLocalTripletStore;
 import io.milton.sync.triplets.SyncHashCache;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.UnknownHostException;
+import java.nio.charset.Charset;
 import java.nio.file.FileSystems;
 import java.nio.file.WatchService;
 import java.util.ArrayList;
@@ -78,27 +80,37 @@ public class AppDeployer {
 
     public static final String DEFAULT_VERSION = "1.0.0";
 
-    public static String findVersion(File appDir) {
-        File versionFile = new File(appDir, "app-version.txt");
-        if (versionFile.exists()) {
-            try {
-                String version = FileUtils.readFileToString(versionFile);
+    public static AppProperties getAppProperties(File appDir) {
+        try {
+            File versionFile = new File(appDir, "app-version.txt");
+            File propertiesFile = new File(appDir, "app.properties");
 
-                version = version == null ? null : version.trim();
+            // Check for app-version.txt
+            if (versionFile.exists()) {
+                String version = FileUtils.readFileToString(appDir, Charset.defaultCharset());
+                if (StringUtils.isNotBlank(version)) {
+                    version = StringUtils.trim(version);
 
-                if (StringUtils.isEmpty(version)) {
-                    log.error("findVersion: Version file " + versionFile.getAbsolutePath() + " is empty, assuming default 0001 version");
-
-                    return DEFAULT_VERSION;
+                    return new AppProperties(version, null);
                 }
+            } // Check for app.properties
+            else if (propertiesFile.exists()) {
+                Properties prop = new Properties();
+                try (FileInputStream fis = new FileInputStream(propertiesFile)) {
+                    prop.load(fis);
 
-                return version;
-            } catch (IOException ex) {
-                log.error("Couldnt read version file " + versionFile.getAbsolutePath());
+                    String version = (String) prop.getOrDefault("version", DEFAULT_VERSION);
+                    String clusters = (String) prop.getOrDefault("clusters", null);
+
+                    return new AppProperties(version, clusters);
+                }
             }
-
+        } catch (IOException e) {
+            log.error("Error reading version or properties file: {}", e.getMessage(), e);
         }
-        return DEFAULT_VERSION;
+
+        // Default
+        return new AppProperties(DEFAULT_VERSION, null);
     }
 
     public static void incrementVersionNumber(File appDir, String versionName) {
@@ -273,10 +285,10 @@ public class AppDeployer {
             return;
         }
 
-        upSyncMarketplaceDir(new File(rootDir, "themes"), true, false);
-        upSyncMarketplaceDir(new File(rootDir, "apps"), false, true);
-        upSyncMarketplaceDir(new File(rootDir, "libs"), false, false);
-        upSyncMarketplaceDir(new File(rootDir, "recipes"), false, false);
+        upSyncMarketplaceDir(new File(rootDir, "themes"), true, false, false);
+        upSyncMarketplaceDir(new File(rootDir, "apps"), false, true, false);
+        upSyncMarketplaceDir(new File(rootDir, "libs"), false, false, false);
+        upSyncMarketplaceDir(new File(rootDir, "recipes"), false, false, true);
 
         System.out.println("");
         System.out.println("");
@@ -299,7 +311,7 @@ public class AppDeployer {
         System.out.println("");
     }
 
-    private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp) throws IOException {
+    private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp, boolean isRecipe) throws IOException {
         log.info("upsync {} {} {}", dir, isTheme, isApp);
         if (dir.listFiles() == null) {
             log.warn("No child dirs in " + dir.getAbsolutePath());
@@ -316,18 +328,18 @@ public class AppDeployer {
                 String appName = appDir.getName();
 
                 if (isProcess(appDir)) {
-                    processAppDir(appName, isTheme, isApp, appDir, fileWatchService);
+                    processAppDir(appName, isTheme, isApp, isRecipe, appDir, fileWatchService);
                 }
             }
         }
     }
 
-    private void processAppDir(String appName, boolean isTheme, boolean isApp, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
+    private void processAppDir(String appName, boolean isTheme, boolean isApp, boolean isRecipe, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
         log.info("checkCreateApp {} {}", appName);
         String appPath = "/manageApps/" + appName;
         boolean appCreated = false;
         if (!doesExist(appPath)) {
-            if (createApp(appName, isTheme, isApp)) {
+            if (createApp(appName, isTheme, isApp, isRecipe)) {
                 appCreated = true;
                 log.info("created app {}", appName);
             } else {
@@ -336,7 +348,9 @@ public class AppDeployer {
             }
         }
 
-        String versionName = AppDeployer.findVersion(appDir);
+        AppProperties appProperties = getAppProperties(appDir);
+        String versionName = appProperties.getVersion();
+
         String appVersionPath = "/repositories/" + appName + "/" + versionName + "/";
         boolean doesVersionExist = doesExist(appVersionPath);
 
@@ -385,9 +399,13 @@ public class AppDeployer {
 
             String branchPath = "/repositories/" + appName + "/";
 
+            // Update MarketPlaceItem here with the clusters supported
+            if (!updateMarketplaceClusters(appName, appProperties.getClusters())) {
+                return;
+            }
+
             if (report) {
                 results.infos.add(appName + " - Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash);
-                return;
             } else {
                 if (makeCurrentVersionLive(branchPath, versionName)) {
                     // Republic, so the live version is the published version
@@ -405,16 +423,13 @@ public class AppDeployer {
                     }
 
                     results.infos.add(appName + " - Published " + appName + " version " + versionName + " with hash " + localHash);
-                    return;
                 } else {
                     results.errors.add(appName + " - Failed to publish version " + appName);
-                    return;
                 }
             }
 
         } else {
             results.errors.add(appName + " Failed to sync local to remote " + appName);
-            return;
         }
 
     }
@@ -594,7 +609,7 @@ public class AppDeployer {
 
     }
 
-    private boolean createApp(String appName, boolean isTheme, boolean isApp) {
+    private boolean createApp(String appName, boolean isTheme, boolean isApp, boolean isRecipe) {
         if (report) {
             log.info("Not doing create app {} because in report mode", appName);
             return false;
@@ -604,6 +619,8 @@ public class AppDeployer {
         params.put("newTitle", appName);
         params.put("providesTheme", isTheme + "");
         params.put("providesApp", isApp + "");
+        params.put("providesRecipe", isRecipe + "");
+
         try {
             log.info("createApp {}", appName);
             String res = client.post("/manageApps/", params);
@@ -675,6 +692,38 @@ public class AppDeployer {
             throw new RuntimeException("Exception creating app " + versionName, ex);
         }
 
+    }
+
+    private boolean updateMarketplaceClusters(String appName, String clusters) {
+        log.info("updateMarketplaceClusters: {} - {}", appName, clusters);
+        if (report) {
+            log.info("Not doing updateMarketplaceClusters {} - {} because in report mode", appName, clusters);
+            return false;
+        }
+
+        // http://localhost:8080/manageApps/test1/
+        String pubPath = "/manageApps/" + appName + "/";
+        Map<String, String> params = new HashMap<>();
+        params.put("updateClusters", "true");
+        params.put("clusters", clusters);
+
+        try {
+            String res = client.post(pubPath, params);
+            JSONObject jsonRes = JSONObject.fromObject(res);
+            Object statusOb = jsonRes.get("status");
+            if (statusOb != null) {
+                Boolean st = (Boolean) statusOb;
+                if (st) {
+                    log.info("Upate marketplace clusters ok");
+                    return true;
+                }
+            }
+            log.info("update marketplace clusters failed", res);
+            return false;
+
+        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
+            throw new RuntimeException("Exception updating marketplace clusters " + appName, ex);
+        }
     }
 
     private boolean addToMarketPlace(String appName) {
@@ -825,7 +874,6 @@ public class AppDeployer {
     }
 
     private void pollForPushComplete(Long jobId, String appName, String localRootHash, String branchPath) {
-        Map<String, String> params = new HashMap<>();
         long sleepyTime = 100;
         PollJobResult pollRes = null;
         try {
@@ -959,14 +1007,14 @@ public class AppDeployer {
             return l;
         } else {
             String s = v.toString();
-            return Long.parseLong(s);
+            return Long.valueOf(s);
         }
     }
 
     private JSONArray getArray(JSONObject data, String name) {
         if (data.containsKey(name)) {
             JSONArray arr = (JSONArray) data.get(name);
-            if (arr.size() > 0) {
+            if (!arr.isEmpty()) {
                 return arr;
             }
         }
