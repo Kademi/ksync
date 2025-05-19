@@ -399,17 +399,12 @@ public class AppDeployer {
 
             String branchPath = "/repositories/" + appName + "/";
 
-            // Update MarketPlaceItem here with the clusters supported
-            if (!updateMarketplaceClusters(appName, appProperties.getClusters())) {
-                return;
-            }
-
             if (report) {
                 results.infos.add(appName + " - Would have published version " + branchPath + "/" + versionName + " with local hash " + localHash);
             } else {
                 if (makeCurrentVersionLive(branchPath, versionName)) {
                     // Republic, so the live version is the published version
-                    if (!publishApp(appName)) {
+                    if (!publishApp(appName, appProperties.getClusters())) {
                         results.errors.add(appName + "Pushed, but could not (re)publish app to marketplace " + appPath);
                         return;
                     }
@@ -694,38 +689,6 @@ public class AppDeployer {
 
     }
 
-    private boolean updateMarketplaceClusters(String appName, String clusters) {
-        log.info("updateMarketplaceClusters: {} - {}", appName, clusters);
-        if (report) {
-            log.info("Not doing updateMarketplaceClusters {} - {} because in report mode", appName, clusters);
-            return false;
-        }
-
-        // http://localhost:8080/manageApps/test1/
-        String pubPath = "/manageApps/" + appName + "/";
-        Map<String, String> params = new HashMap<>();
-        params.put("updateClusters", "true");
-        params.put("clusters", clusters);
-
-        try {
-            String res = client.post(pubPath, params);
-            JSONObject jsonRes = JSONObject.fromObject(res);
-            Object statusOb = jsonRes.get("status");
-            if (statusOb != null) {
-                Boolean st = (Boolean) statusOb;
-                if (st) {
-                    log.info("Upate marketplace clusters ok");
-                    return true;
-                }
-            }
-            log.info("update marketplace clusters failed", res);
-            return false;
-
-        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
-            throw new RuntimeException("Exception updating marketplace clusters " + appName, ex);
-        }
-    }
-
     private boolean addToMarketPlace(String appName) {
         log.info("addToMarketPlace: {}", appName);
         if (report) {
@@ -756,16 +719,19 @@ public class AppDeployer {
         }
     }
 
-    private boolean publishApp(String appName) {
+    private boolean publishApp(String appName, String clusters) {
         log.info("publishApp: {}", appName);
         if (report) {
-            log.info("Not doing publishApp {} because in report mode", appName);
+            log.info("Not doing publishApp {} because in report mode. Clusters {}", appName, clusters);
             return false;
         }
+
         // http://localhost:8080/manageApps/test1/
         String pubPath = "/manageApps/" + appName + "/";
         Map<String, String> params = new HashMap<>();
         params.put("publishApp", "true");
+        params.put("clusters", clusters);
+
         try {
             String res = client.post(pubPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
@@ -777,9 +743,9 @@ public class AppDeployer {
                     return true;
                 }
             }
+
             log.info("add to market place failed - {}", res);
             return false;
-
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             throw new RuntimeException("Exception publishing app to marketplace" + appName, ex);
         }
