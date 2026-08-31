@@ -74,6 +74,7 @@ import org.apache.http.protocol.HttpContext;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Combiner;
 import org.hashsplit4j.api.Fanout;
+import org.hashsplit4j.api.HashCache;
 import org.hashsplit4j.api.HashStore;
 import org.hashsplit4j.store.FileSystem2BlobStore;
 import org.hashsplit4j.store.FileSystem2HashStore;
@@ -437,29 +438,17 @@ public class KSync3 {
         this.localBlobStore = new FileSystem2BlobStore(new File(repoDir, "blobs"));
         this.localHashStore = new FileSystem2HashStore(new File(repoDir, "hashes"));
 
-        HttpBloomFilterHashCache blobsHashCache = null;
-        try {
-            log.info("Fetching Blobs Bloom Filter...");
-            blobsHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom");
-        } catch (Exception e) {
-            log.warn("Unable to load blobs bloom filter, so things will be a bit slow: ", e);
-        }
-
-        HttpBloomFilterHashCache chunckFanoutHashCache = null;
-        try {
-            log.info("Fetching Chunks Bloom Filter...");
-            chunckFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom");
-        } catch (Exception e) {
-            log.warn("Unable to load chunks bloom filter, so things will be a bit slow ", e);
-        }
-
-        HttpBloomFilterHashCache fileFanoutHashCache = null;
-        try {
-            log.info("Fetching Files Bloom Filter...");
-            fileFanoutHashCache = new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom");
-        } catch (Exception e) {
-            log.warn("Unable to load files bloom filter, so things will be a bit slow", e);
-        }
+        // The bloom filters tell us what the server already has, and each one costs the server a full walk of the
+        // repository to produce, so they are built on first use rather than eagerly here. A checkout that gets a pack
+        // never touches the http stores at all and so never asks for them, and neither do login or commit. The
+        // per-object fallback still does, because HttpHashStore and HttpBlobStore consult the caches in hasFile,
+        // hasChunk and hasBlob.
+        HashCache blobsHashCache = new LazyHashCache("Blobs Bloom Filter",
+                () -> new HttpBloomFilterHashCache(client, branchPath, "type", "blobs-bloom"));
+        HashCache chunckFanoutHashCache = new LazyHashCache("Chunks Bloom Filter",
+                () -> new HttpBloomFilterHashCache(client, branchPath, "type", "chunks-bloom"));
+        HashCache fileFanoutHashCache = new LazyHashCache("Files Bloom Filter",
+                () -> new HttpBloomFilterHashCache(client, branchPath, "type", "files-bloom"));
 
         httpBlobStore = new HttpBlobStore(client, blobsHashCache);
         httpBlobStore.setBaseUrl("/_hashes/blobs/");
@@ -784,14 +773,22 @@ public class KSync3 {
     }
 
     public void combineToRemote(Path filePath, String fileHash) throws InterruptedException {
-        combine(filePath.toString(), fileHash, this.httpHashStore, this.httpBlobStore, localHashStore, localBlobStore);
+        combine(filePath.toString(), fileHash, this.httpHashStore, this.httpBlobStore, localHashStore, localBlobStore, false);
     }
 
     public void combineToLocal(Path filePath, String fileHash) throws InterruptedException {
-        combine(filePath.toString(), fileHash, localHashStore, localBlobStore, this.wrappedHashStore, this.wrappedBlobStore);
+        combine(filePath.toString(), fileHash, localHashStore, localBlobStore, this.wrappedHashStore, this.wrappedBlobStore, true);
     }
 
-    private void combine(String filePath, String fileHash, HashStore destHashStore, BlobStore destBlobStore, HashStore sourceHashStore, BlobStore sourceBlobStore) throws InterruptedException {
+    /**
+     * Copies a file's fanouts and blobs from one pair of stores to another.
+     *
+     * @param synchronous when true the writes happen on this thread. Writing to the remote is done on the transfer
+     * executor so uploads overlap, and the file fanout must not be set until they finish, which is what the wait below
+     * is for. Writing to the local stores is just disk IO - the expensive part, fetching from the source, has already
+     * happened on this thread - so queueing it buys nothing and the wait would cost a second per file.
+     */
+    private void combine(String filePath, String fileHash, HashStore destHashStore, BlobStore destBlobStore, HashStore sourceHashStore, BlobStore sourceBlobStore, boolean synchronous) throws InterruptedException {
         if (destHashStore.hasFile(fileHash)) {
             return;
         }
@@ -809,52 +806,52 @@ public class KSync3 {
                 for (String hash : hashes) {
                     if (!destBlobStore.hasBlob(hash)) {
                         byte[] arr = sourceBlobStore.getBlob(hash);
-                        c.up();
-                        transferQueueCounter.up();
-                        transferExecutor.submit(() -> {
-                            log.info("transfer blob for file {} with size {} bytes", filePath, arr.length);
+                        if (synchronous) {
                             destBlobStore.setBlob(hash, arr);
-                            c.down();
-                            transferQueueCounter.down();
-                            //log.info("Finished Copy file chunk hash={}", hash);
-                        });
-                        //log.info("queue size {}", transferJobs.size());
+                        } else {
+                            c.up();
+                            transferQueueCounter.up();
+                            transferExecutor.submit(() -> {
+                                log.info("transfer blob for file {} with size {} bytes", filePath, arr.length);
+                                destBlobStore.setBlob(hash, arr);
+                                c.down();
+                                transferQueueCounter.down();
+                            });
+                        }
                     }
                 }
 
                 if (!destHashStore.hasChunk(fanoutHash)) {
-                    c.up();
-                    transferQueueCounter.up();
-                    transferExecutor.submit(() -> {
-                        log.info("Transfer chunk for file {}", filePath);
+                    if (synchronous) {
                         destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
-                        c.down();
-                        transferQueueCounter.down();
-                        //log.info("Finish transfer chunk hash={} ", filePath);
-                    });
-
+                    } else {
+                        c.up();
+                        transferQueueCounter.up();
+                        transferExecutor.submit(() -> {
+                            log.info("Transfer chunk for file {}", filePath);
+                            destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
+                            c.down();
+                            transferQueueCounter.down();
+                        });
+                    }
                 }
             }
 
             if (!destHashStore.hasFile(fileHash)) {
-                // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-                //log.info("set file hash1 queue size={} counter={}", transferJobs.size(), c.count);
-                log.info("Waiting for transfers to complete");
-                // System.out.println("INFO  co.kademi.sync.KSync3  - Waiting for transfers to complete.");
-                while (c.count > 0) {
-                    //log.info("..waiting for transfers to complete. remaining={}", c.count);
-                    // System.out.print(".");
-                    Thread.sleep(1000);
-                }
-                // System.out.println("");
-                //System.out.println("Transfers completed");
-                //log.info("set file hash2");
-                transferQueueCounter.up();
-                transferExecutor.submit(() -> {
-                    //log.info("Upload file {} ", filePath);
+                if (synchronous) {
                     destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
-                    transferQueueCounter.down();
-                });
+                } else {
+                    // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
+                    log.info("Waiting for transfers to complete");
+                    while (c.count > 0) {
+                        Thread.sleep(1000);
+                    }
+                    transferQueueCounter.up();
+                    transferExecutor.submit(() -> {
+                        destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
+                        transferQueueCounter.down();
+                    });
+                }
             }
         } catch (Exception e) {
             String errMsg = "Could not retrieve file " + filePath + " because " + e.getMessage();
@@ -866,11 +863,19 @@ public class KSync3 {
     private void checkout(File configDir) {
         log.info("checkout {}", branchPath);
         String hash = getRemoteHash(branchPath);
-        try {
-            fetch(Path.root, hash, ignores); // fetch into local blobstore
-        } catch (InterruptedException ex) {
-            log.error("interripted", ex);
-            return;
+
+        // Checkout starts from nothing, so ask the server for the whole object graph in one request. Anything the
+        // server cannot pack, or a server too old to know about packs, drops us back to walking it object by object.
+        PackFetcher packFetcher = new PackFetcher(client, localBlobStore, localHashStore);
+        if (packFetcher.fetch(hash)) {
+            errors.addAll(packFetcher.getErrors());
+        } else {
+            try {
+                fetch(Path.root, hash, ignores); // fetch into local blobstore
+            } catch (InterruptedException ex) {
+                log.error("interripted", ex);
+                return;
+            }
         }
         pull(hash, this.localDir, ignores); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
@@ -980,7 +985,7 @@ public class KSync3 {
         //fileDownloadQueue.add(hash);
         Future<?> f = fileTransferExecutor.submit(() -> {
             try {
-                combineToLocal(Path.root, hash);
+                combineToLocal(filePath, hash);
             } catch (InterruptedException ex) {
                 throw new RuntimeException(ex);
             }
