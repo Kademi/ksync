@@ -13,6 +13,8 @@ import io.milton.http.exceptions.ConflictException;
 import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
 import io.milton.httpclient.Host;
+import co.kademi.sync.BearerHost;
+import co.kademi.sync.oauth.OAuth2Client;
 import io.milton.httpclient.HttpException;
 import io.milton.httpclient.HttpResult;
 import io.milton.httpclient.PropFindResponse;
@@ -135,11 +137,11 @@ public class AppDeployer {
     }
 
     public static void publish(Options options, CommandLine line) throws Exception {
-        log.info("Running publish command..");
+        log.info("Publishing..");
 
         KSyncUtils.withDir((File dir) -> {
             if (!dir.exists()) {
-                System.out.println("Dir not found: " + dir.getAbsolutePath());
+                log.error("Directory not found: {}", dir.getAbsolutePath());
                 return;
             }
 
@@ -147,24 +149,25 @@ public class AppDeployer {
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
 
+            String url = KSync3Utils.getInput(options, line, "url", props, true);
+            log.debug(url);
+            KSyncUtils.migrateLegacyCredentials(url, configDir);
+
             String auth = line.getOptionValue("auth");
-            if (StringUtils.isNotBlank(auth)) {
-                if (auth.contains(",")) {
-                    String[] arr = auth.split(",");
-                    String userName = arr[0].trim();
-                    String token = arr[1].trim();
-                    String userUrl = "/users/" + userName;
-                    writeLoginProps(userUrl, token, configDir);
-                    props = KSyncUtils.readProps(configDir);
-                }
+            if (StringUtils.isNotBlank(auth) && auth.contains(",")) {
+                String[] arr = auth.split(",");
+                String userName = arr[0].trim();
+                String token = arr[1].trim();
+                String userUrl = "/users/" + userName;
+                writeLoginProps(userUrl, token, url);
+                props = KSyncUtils.readProps(configDir);
             }
 
-            Map cookies = KSyncUtils.getCookies(configDir);
-            String url = KSync3Utils.getInput(options, line, "url", props, true);
-            log.info(url);
-            String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
+            Map cookies = KSyncUtils.getCookies(url);
+            OAuth2Client oauth = KSyncUtils.oauth2SessionOrNull(url);
+            String user = KSync3Utils.getInput(options, line, "user", props, oauth == null && cookies.isEmpty());
             String password = null;
-            if (cookies.isEmpty()) {
+            if (oauth == null && cookies.isEmpty()) {
                 password = KSync3Utils.getPassword(line, user, url);
             }
             String appIds = KSync3Utils.getInput(options, line, "appids", null);
@@ -174,21 +177,21 @@ public class AppDeployer {
 
             AppDeployer d;
             try {
-                d = new AppDeployer(dir, url, user, password, appIds, cookies);
+                d = new AppDeployer(dir, url, user, password, appIds, cookies, oauth);
                 d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
                 d.force = KSync3Utils.getBooleanInput(line, "force");
                 d.report = KSync3Utils.getBooleanInput(line, "report");
                 d.ignores = ignores;
 
-                log.info("---- OPTIONS ----");
-                log.info("url: " + url);
-                log.info("dir: " + dir.getAbsolutePath());
-                log.info("  -autoincrement: " + d.autoIncrement);
-                log.info("  -report: " + d.report);
-                log.info("  -force: " + d.force);
-                log.info("  -appIds: " + appIds);
-                log.info("  -ignore: " + ignores);
-                log.info("--------------");
+                log.debug("---- OPTIONS ----");
+                log.debug("url: " + url);
+                log.debug("dir: " + dir.getAbsolutePath());
+                log.debug("  -autoincrement: " + d.autoIncrement);
+                log.debug("  -report: " + d.report);
+                log.debug("  -force: " + d.force);
+                log.debug("  -appIds: " + appIds);
+                log.debug("  -ignore: " + ignores);
+                log.debug("--------------");
                 d.upsync();
 
                 if (!d.results.errors.isEmpty()) {
@@ -198,7 +201,7 @@ public class AppDeployer {
                 throw new RuntimeException(ex);
             }
 
-            log.info("Completed");
+            log.debug("Completed");
         }, options, line);
     }
 
@@ -222,15 +225,24 @@ public class AppDeployer {
     private final SyncHashCache fileHashCache;
 
     public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
+        this(dir, sRemoteAddress, user, password, sAppIds, cookies, null);
+    }
+
+    public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
         int timeout = 180000;
         //client = new Host(url.getHost(), url.getPort(), user, password, null);
-        client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, null, null);
-        if (cookies != null) {
-            client.getCookies().putAll(cookies);
-            client.setUsePreemptiveAuth(false);
+        if (oauth != null) {
+            // Bearer auth carries the identity, so no cookies and no Basic auth
+            client = new BearerHost(url.getHost(), "/", url.getPort(), user, oauth::accessToken, timeout);
+        } else {
+            client = new Host(url.getHost(), "/", url.getPort(), user, password, null, timeout, new java.util.concurrent.ConcurrentHashMap<>(), null);
+            if (cookies != null) {
+                client.getCookies().putAll(cookies);
+                client.setUsePreemptiveAuth(false);
+            }
         }
         client.setUseDigestForPreemptiveAuth(false);
         boolean secure = url.getProtocol().equals("https");
@@ -244,7 +256,7 @@ public class AppDeployer {
             dataDirName += "-" + user;
         }
         File envDir = new File(tmpDir, dataDirName);
-        log.info("Using local data dir {}", localDataDir);
+        log.debug("Using local data dir {}", localDataDir);
 
         localBlobStore = new FileSystem2BlobStore(new File(localDataDir, "blobs"));
         localHashStore = new FileSystem2HashStore(new File(localDataDir, "hash"));
@@ -312,7 +324,7 @@ public class AppDeployer {
     }
 
     private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp, boolean isRecipe) throws IOException {
-        log.info("upsync {} {} {}", dir, isTheme, isApp);
+        log.debug("upsync {} {} {}", dir, isTheme, isApp);
         if (dir.listFiles() == null) {
             log.warn("No child dirs in " + dir.getAbsolutePath());
             return;
@@ -335,13 +347,13 @@ public class AppDeployer {
     }
 
     private void processAppDir(String appName, boolean isTheme, boolean isApp, boolean isRecipe, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
-        log.info("checkCreateApp {} {}", appName);
+        log.debug("checkCreateApp {} {}", appName);
         String appPath = "/manageApps/" + appName;
         boolean appCreated = false;
         if (!doesExist(appPath)) {
             if (createApp(appName, isTheme, isApp, isRecipe)) {
                 appCreated = true;
-                log.info("created app {}", appName);
+                log.debug("created app {}", appName);
             } else {
                 results.errors.add(appName + " - couldnt create app");
                 return;
@@ -375,7 +387,7 @@ public class AppDeployer {
                 String remoteHash = getRemoteHash(branchPath);
                 if (localHash.equals(remoteHash)) {
                     if (!force) {
-                        log.info("App is an exact match local and remote ={}", localHash);
+                        log.debug("App is an exact match local and remote ={}", localHash);
                         results.infos.add(appName + " version " + versionName + " is already published, and exactly matches local " + localHash);
                         return;
                     } else {
@@ -411,7 +423,7 @@ public class AppDeployer {
 
                     if (autoIncrement) {
                         if (report) {
-                            log.info("Would have auto-incremented " + appDir);
+                            log.debug("Would have auto-incremented " + appDir);
                         } else {
                             incrementVersionNumber(appDir, versionName);
                         }
@@ -430,7 +442,7 @@ public class AppDeployer {
     }
 
     private String upSyncMarketplaceVersionDir(String appName, String versionName, File localRootDir, FileSystemWatchingService fileWatchService) {
-        log.info("upSyncMarketplaceVersionDir app={}", appName);
+        log.debug("upSyncMarketplaceVersionDir app={}", appName);
         try {
             if (!checkCreateAppVersion(appName, versionName)) {
                 return null;
@@ -483,15 +495,15 @@ public class AppDeployer {
                 bhs.checkComplete();
             }
 
-            log.info("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
-            log.info("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
+            log.debug("HttpBlobStore: gets={} sets={}", httpBlobStore.getGets(), httpBlobStore.getSets());
+            log.debug("HttpHashStore: gets={} sets={}", httpHashStore.getGets(), httpHashStore.getSets());
 
             if (needsPush.get() || force) {
                 try {
                     if (needsPush.get()) {
-                        log.info("File changed in {}, new repo hash {}", localRootDir, newHash);
+                        log.debug("File changed in {}, new repo hash {}", localRootDir, newHash);
                     } else {
-                        log.info("No file changes detected, but force is on so will push, repo hash {}", localRootDir, newHash);
+                        log.debug("No file changes detected, but force is on so will push, repo hash {}", localRootDir, newHash);
                     }
                     push(appName, newHash, branchPath);
 
@@ -521,7 +533,7 @@ public class AppDeployer {
             }
         }
         if (report) {
-            log.info("Not doing push {} because in report mode", branchPath);
+            log.debug("Not doing push {} because in report mode", branchPath);
             return;
         }
 
@@ -530,7 +542,7 @@ public class AppDeployer {
         params.put("newHash", localRootHash);
         params.put("validate", "async");
         try {
-            log.info("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
+            log.debug("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
             String res = client.post(branchPath, params);
 
             // Get the JobID to poll with
@@ -539,7 +551,7 @@ public class AppDeployer {
             if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
-                    log.info("Push async started ok");
+                    log.debug("Push async started ok");
                     JSONObject data = (JSONObject) jsonRes.get("data");
                     Long jobId = asLong(data.get("jobId"));
 
@@ -572,9 +584,9 @@ public class AppDeployer {
         String appBasPath = "/repositories/" + appName + "/";
         String versionPath = appBasPath + versionName;
         if (!doesExist(versionPath)) {
-            log.info("Version does not exist app={} version={}", appName, versionName);
+            log.debug("Version does not exist app={} version={}", appName, versionName);
             if (createVersion(appBasPath, versionName)) {
-                log.info("Created version {}", versionName);
+                log.debug("Created version {}", versionName);
             } else {
                 if (report) {
                     results.infos.add(appName + " - Would have created " + versionName + " because that version doesnt exist");
@@ -584,7 +596,7 @@ public class AppDeployer {
                 }
             }
         } else {
-            log.info("Version already exists app={} version={}", appName, versionName);
+            log.debug("Version already exists app={} version={}", appName, versionName);
         }
         return true;
     }
@@ -606,7 +618,7 @@ public class AppDeployer {
 
     private boolean createApp(String appName, boolean isTheme, boolean isApp, boolean isRecipe) {
         if (report) {
-            log.info("Not doing create app {} because in report mode", appName);
+            log.debug("Not doing create app {} because in report mode", appName);
             return false;
         }
         Map<String, String> params = new HashMap<>();
@@ -617,18 +629,18 @@ public class AppDeployer {
         params.put("providesRecipe", isRecipe + "");
 
         try {
-            log.info("createApp {}", appName);
+            log.debug("createApp {}", appName);
             String res = client.post("/manageApps/", params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
             if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
-                    log.info("Created ok");
+                    log.debug("Created ok");
                     return true;
                 }
             }
-            log.info("Create app failed", res);
+            log.debug("Create app failed", res);
             return false;
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
@@ -638,7 +650,7 @@ public class AppDeployer {
 
     private boolean createVersion(String appBasPath, String versionName) {
         if (report) {
-            log.info("Not doing create version {}/{} because in report mode", appBasPath, versionName);
+            log.debug("Not doing create version {}/{} because in report mode", appBasPath, versionName);
             return false;
         }
         try {
@@ -646,7 +658,7 @@ public class AppDeployer {
             String appPath = p + "/";
             List<PropFindResponse> list = client.propFind(appPath, 1, RespUtils.davName("name"), RespUtils.davName("resourcetype"), RespUtils.davName("iscollection"));
             List<String> versions = new ArrayList<>();
-            log.info("createVersion: looking for highest version, found {} child resources", list.size());
+            log.debug("createVersion: looking for highest version, found {} child resources", list.size());
             for (PropFindResponse l : list) {
                 if (l.isCollection()) {
                     String name = l.getName();
@@ -657,30 +669,30 @@ public class AppDeployer {
             }
             String highestVersion;
             if (versions.isEmpty()) {
-                log.info("createVersion: no existing versions, use default 'version1', tried propfind path {}", appPath);
+                log.debug("createVersion: no existing versions, use default 'version1', tried propfind path {}", appPath);
                 highestVersion = "version1";
             } else {
                 versions.sort(ComparatorUtils.NATURAL_COMPARATOR);
                 highestVersion = versions.get(versions.size() - 1);
             }
-            log.info("Found highest version {} of app {}", highestVersion, appBasPath);
+            log.debug("Found highest version {} of app {}", highestVersion, appBasPath);
 
             String version1 = appBasPath + highestVersion;
             Map<String, String> params = new HashMap<>();
             params.put("copyToName", versionName);
 
-            log.info("createVersion {} -> {}", version1, versionName);
+            log.debug("createVersion {} -> {}", version1, versionName);
             String res = client.post(version1, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
             if (statusOb != null) {
                 Boolean st = (Boolean) statusOb;
                 if (st) {
-                    log.info("Created ok");
+                    log.debug("Created ok");
                     return true;
                 }
             }
-            log.info("Create version failed", res);
+            log.debug("Create version failed", res);
             return false;
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException | IOException ex) {
@@ -690,9 +702,9 @@ public class AppDeployer {
     }
 
     private boolean addToMarketPlace(String appName) {
-        log.info("addToMarketPlace: {}", appName);
+        log.debug("addToMarketPlace: {}", appName);
         if (report) {
-            log.info("Not doing addToMarketPlace {} because in report mode", appName);
+            log.debug("Not doing addToMarketPlace {} because in report mode", appName);
             return false;
         }
         // http://localhost:8080/manageApps/test1/
@@ -711,7 +723,7 @@ public class AppDeployer {
                     return true;
                 }
             }
-            log.info("add to market place failed", res);
+            log.debug("add to market place failed", res);
             return false;
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
@@ -744,7 +756,7 @@ public class AppDeployer {
                 }
             }
 
-            log.info("add to market place failed - {}", res);
+            log.debug("add to market place failed - {}", res);
             return false;
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             throw new RuntimeException("Exception publishing app to marketplace" + appName, ex);
@@ -779,7 +791,7 @@ public class AppDeployer {
                     return true;
                 }
             }
-            log.info("Create version failed", res);
+            log.debug("Create version failed", res);
             return false;
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
@@ -809,7 +821,7 @@ public class AppDeployer {
     }
 
     private String getLocalHash(String appName, String versionName, File localRootDir) {
-        log.info("getLocalHash app={}", appName);
+        log.debug("getLocalHash app={}", appName);
         try {
             // Dont need bloom filters because we wont be pushing
             HttpBloomFilterHashCache blobsHashCache = null;
@@ -843,11 +855,11 @@ public class AppDeployer {
         long sleepyTime = 100;
         PollJobResult pollRes = null;
         try {
-            log.info("PUSH Local: {}", localRootHash);
+            log.debug("PUSH Local: {}", localRootHash);
             boolean done = false;
             while (!done) {
                 String url = "/tasks/?jobId=" + jobId + "&asJson";
-                log.info("poll for push result {} ...", url);
+                log.debug("poll for push result {} ...", url);
                 byte[] bytes = client.get(url); // response can either be in-progress, or completed. If completed will have missing objects in data
                 String res = new String(bytes);
                 pollRes = parseJson(res);
@@ -887,13 +899,13 @@ public class AppDeployer {
             JSONArray missingBlobs = getArray(data, "missingBlobs");
 
             if (missingBlobs != null || missingChunkFanouts != null || missingFileFanouts != null) {
-                log.info("processPushResponse: missing objects, will upload individually");
+                log.debug("processPushResponse: missing objects, will upload individually");
                 int count = 0;
                 httpHashStore.setForce(true);
                 httpBlobStore.setForce(true);
                 if (missingFileFanouts != null) {
                     for (Object ff : missingFileFanouts.toArray()) {
-                        log.info("Missing file fanout: {}", ff);
+                        log.debug("Missing file fanout: {}", ff);
                         String missingHash = ff.toString();
                         Fanout f = localHashStore.getFileFanout(missingHash);
                         if (f == null) {
@@ -901,13 +913,13 @@ public class AppDeployer {
                         }
                         count++;
                         httpHashStore.setFileFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                        log.info("Uploaded missing file fanout");
+                        log.debug("Uploaded missing file fanout");
                     }
                 }
 
                 if (missingChunkFanouts != null) {
                     for (Object ff : missingChunkFanouts.toArray()) {
-                        log.info("Missing chunk fanout: {}", ff);
+                        log.debug("Missing chunk fanout: {}", ff);
                         String missingHash = ff.toString();
                         Fanout f = localHashStore.getChunkFanout(missingHash);
                         if (f == null) {
@@ -915,14 +927,14 @@ public class AppDeployer {
                         }
                         count++;
                         httpHashStore.setChunkFanout(missingHash, f.getHashes(), f.getActualContentLength());
-                        log.info("Uploaded missing chunk fanout");
+                        log.debug("Uploaded missing chunk fanout");
                     }
                 }
 
                 // missingBlobs
                 if (missingBlobs != null) {
                     for (Object ff : missingBlobs.toArray()) {
-                        log.info("Missing blob: {}", ff);
+                        log.debug("Missing blob: {}", ff);
                         String missingHash = ff.toString();
                         byte[] f = localBlobStore.getBlob(missingHash);
                         if (f == null) {
@@ -930,16 +942,16 @@ public class AppDeployer {
                         }
                         httpBlobStore.setBlob(missingHash, f);
                         count++;
-                        log.info("Uploaded missing blob");
+                        log.debug("Uploaded missing blob");
                     }
                 }
-                log.info("Push failed: But uploaded " + count + "missing objects have been uploaded so will try again :)", res);
+                log.debug("Push failed: But uploaded " + count + "missing objects have been uploaded so will try again :)", res);
                 push(appName, localRootHash, branchPath);
                 return;
             }
         }
 
-        log.info("Push and verify job {} complete, no missing objects, repository {} has been updated", jobId, appName);
+        log.debug("Push and verify job {} complete, no missing objects, repository {} has been updated", jobId, appName);
     }
 
     private PollJobResult parseJson(String res) {
@@ -1046,7 +1058,7 @@ public class AppDeployer {
                             Thread.sleep(300);
                         }
                     }
-                    log.info("AppDeployerBlobStore: transfer process finished");
+                    log.debug("AppDeployerBlobStore: transfer process finished");
                 } catch (Exception ex) {
                     log.error("AppDeployerBlobStore: exception", ex);
                     this.transferException = ex;
@@ -1074,7 +1086,7 @@ public class AppDeployer {
             } else {
                 transferQueueCounter.up("blob");
                 transferExecutor.submit(() -> {
-                    log.info("setBlob: start transfer. Count={}", transferQueueCounter.count());
+                    log.debug("setBlob: start transfer. Count={}", transferQueueCounter.count());
                     long tm = System.currentTimeMillis();
                     try {
                         //System.out.println("upload " + dirHash);
@@ -1084,7 +1096,7 @@ public class AppDeployer {
                         transferQueueCounter.down("blob");
                     }
                     tm = System.currentTimeMillis() - tm;
-                    log.info("Transferred blob in {} ms", tm);
+                    log.debug("Transferred blob in {} ms", tm);
                 });
             }
         }
@@ -1109,19 +1121,19 @@ public class AppDeployer {
                 throw new RuntimeException("Exception occured uploading blobs", transferException);
             }
 
-            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
+            log.debug("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
             while (transferQueueCounter.count() > 0 || !this.blobs.isEmpty()) {
                 if (transferException != null) {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
-                log.info("..waiting for blob transfers to complete. transferJobs={} remaining={} blobs={}", transferJobs.size(), transferQueueCounter.count(), this.blobs.size());
+                log.debug("..waiting for blob transfers to complete. transferJobs={} remaining={} blobs={}", transferJobs.size(), transferQueueCounter.count(), this.blobs.size());
                 Thread.sleep(1000);
             }
             this.running = false;
         }
 
         public final void doBulkUpload(Set<BlobImpl> blobss) throws IOException {
-            log.info("doBulkUpload: upload {} blobs", blobss.size());
+            log.debug("doBulkUpload: upload {} blobs", blobss.size());
             Path destPath = Path.path("/_hashes/blobs/").child("bulkBlobs.zip");
             transferQueueCounter.up(destPath.toString());
             transferExecutor.submit(() -> {
@@ -1148,7 +1160,7 @@ public class AppDeployer {
                     log.error("Exception in blobs transfer", ex);
                 } finally {
                     transferQueueCounter.down(destPath.toString());
-                    log.info("doBulkUpload: DONE upload {} blobs; transfer count={}", blobss.size(), transferQueueCounter.count());
+                    log.debug("doBulkUpload: DONE upload {} blobs; transfer count={}", blobss.size(), transferQueueCounter.count());
                 }
             });
         }
@@ -1197,7 +1209,7 @@ public class AppDeployer {
                 try {
                     while (running || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
 
-                        log.info("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
+                        log.debug("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
                         boolean didNothing = true;
 
                         Set<FanoutBean> toUpload = new HashSet<>();
@@ -1218,7 +1230,7 @@ public class AppDeployer {
                             Thread.sleep(2000);
                         }
                     }
-                    log.info("AppDeployerBlobStore: transfer process finished");
+                    log.debug("AppDeployerBlobStore: transfer process finished");
                 } catch (Exception ex) {
                     this.transferException = ex;
                 }
@@ -1327,17 +1339,17 @@ public class AppDeployer {
                     if (result.getStatusCode() < 200 || result.getStatusCode() > 299) {
                         throw new RuntimeException("Failed to upload - " + result.getStatusCode());
                     } else {
-                        log.info("doBulkFanoutUpload: upload status={} destPath={}", result.getStatusCode(), destPath);
+                        log.debug("doBulkFanoutUpload: upload status={} destPath={}", result.getStatusCode(), destPath);
                     }
                 } catch (Exception ex) {
                     transferException = ex;
                     log.error("Exception in fanouts transfer", ex);
                 } finally {
                     transferQueueCounter.down(destPath.toString());
-                    log.info("doBulkUpload: DONE upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
+                    log.debug("doBulkUpload: DONE upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
                 }
             });
-            log.info("doBulkUpload: upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
+            log.debug("doBulkUpload: upload {} hashes; transfer count={}", toUpload.size(), transferQueueCounter.count());
         }
 
         @Override
@@ -1345,12 +1357,12 @@ public class AppDeployer {
             if (transferException != null) {
                 throw new RuntimeException("Fanouts transfer exception", transferException);
             }
-            log.info("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
+            log.debug("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
             while (transferQueueCounter.count() > 0 || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
                 if (transferException != null) {
                     throw new RuntimeException("Fanouts transfer exception", transferException);
                 }
-                log.info("..waiting for fanout transfers to complete. transfers in progress={} chunkQueue={} fileQueue={}", transferQueueCounter.count(), chunkBeans.size(), fileBeans.size());
+                log.debug("..waiting for fanout transfers to complete. transfers in progress={} chunkQueue={} fileQueue={}", transferQueueCounter.count(), chunkBeans.size(), fileBeans.size());
                 Thread.sleep(1000);
             }
             this.running = false;

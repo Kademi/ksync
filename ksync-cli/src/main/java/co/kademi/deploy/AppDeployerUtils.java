@@ -37,7 +37,7 @@ public class AppDeployerUtils {
         out.finish();
 
         IOUtils.closeQuietly(out);
-        log.info("compressBulkBlobs: {} to upload", formatBytes(dest.size()));
+        log.debug("compressBulkBlobs: {} to upload", formatBytes(dest.size()));
 
         return dest.toByteArray();
     }
@@ -45,7 +45,7 @@ public class AppDeployerUtils {
     public static byte[] compressBulkFanouts(Set<AppDeployer.FanoutBean> toUpload) throws Exception {
         ByteArrayOutputStream dest = new ByteArrayOutputStream();
         ZipOutputStream out = new ZipOutputStream(new BufferedOutputStream(dest));
-        log.info("compressBulkFanouts: fanouts to upload={}", toUpload.size());
+        log.debug("compressBulkFanouts: fanouts to upload={}", toUpload.size());
         Set<String> hashes = new HashSet<>();
         for (AppDeployer.FanoutBean fanout : toUpload) {
             //log.info("compressBulkFanouts: hash={}", fanout.hash);
@@ -61,7 +61,7 @@ public class AppDeployerUtils {
                 //System.out.println("compress fanout\n" + s);
                 IOUtils.write(bytes, out);
             } else {
-                log.info("Ignoring duplicate hash: {} length={}", fanout.hash, fanout.actualContentLength);
+                log.debug("Ignoring duplicate hash: {} length={}", fanout.hash, fanout.actualContentLength);
             }
 
         }
@@ -70,7 +70,7 @@ public class AppDeployerUtils {
         out.finish();
 
         IOUtils.closeQuietly(out);
-        log.info("compressBulkFanouts: {} to upload", formatBytes(dest.size()));
+        log.debug("compressBulkFanouts: {} to upload", formatBytes(dest.size()));
 
         return dest.toByteArray();
     }

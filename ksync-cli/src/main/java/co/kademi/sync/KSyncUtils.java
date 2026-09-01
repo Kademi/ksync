@@ -1,5 +1,7 @@
 package co.kademi.sync;
 
+import co.kademi.sync.oauth.CredentialStore;
+import co.kademi.sync.oauth.OAuth2Client;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -32,6 +34,9 @@ public class KSyncUtils {
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
 
+            String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
+            migrateLegacyCredentials(url, configDir);
+
             String auth = line.getOptionValue("auth");
             if (StringUtils.isNotBlank(auth)) {
                 if (auth.contains(",")) {
@@ -39,24 +44,26 @@ public class KSyncUtils {
                     String userName = arr[0].trim();
                     String token = arr[1].trim();
                     String userUrl = "/users/" + userName;
-                    log.info("Auth token provided in args: userUrl={}", userUrl);
-                    writeLoginProps(userUrl, token, configDir);
+                    log.debug("Auth token provided in args: userUrl={}", userUrl);
+                    writeLoginProps(userUrl, token, url);
                 }
             }
-            Map cookies = KSyncUtils.getCookies(configDir);
-            String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
-            String user = KSync3Utils.getInput(options, line, "user", props, cookies.isEmpty());
+            Map cookies = KSyncUtils.getCookies(url);
+            OAuth2Client oauth = oauth2SessionOrNull(url);
+            String user = KSync3Utils.getInput(options, line, "user", props, oauth == null && cookies.isEmpty());
             String pwd = null;
-            if (cookies.isEmpty()) {
+            if (oauth != null) {
+                log.debug("Using the stored OAuth2 session, so dont prompt for password");
+            } else if (cookies.isEmpty()) {
                 pwd = KSync3Utils.getPassword(line, url, user);
             } else {
-                log.info("We have login cookies, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
+                log.debug("We have a saved login, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
             }
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
             List<String> ignores = KSync3Utils.split(sIgnores);
             KSyncUtils.writeProps(url, user, configDir);
 
-            KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies);
+            KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth);
             command.accept(kSync3);
         }, options, line);
     }
@@ -122,20 +129,106 @@ public class KSyncUtils {
         return list;
     }
 
-    public static Map<String, String> getCookies(File repoDir) {
-        Properties props = readProps(repoDir);
-        return getCookies(props);
+    /**
+     * An OAuth2 client for a site. Credentials live in the per-user store, not in the repo, so
+     * a token is never sitting in a directory a git commit can reach.
+     */
+    public static OAuth2Client newOAuth2Client(String url) {
+        return new OAuth2Client(baseUrlOf(url), CredentialStore.defaultStore());
     }
 
-    public static Map<String, String> getCookies(Properties props) {
-        Map<String, String> map = new HashMap<>();
-        if (props.containsKey("userUrl")) {
-            map.put("miltonUserUrl", props.getProperty("userUrl"));
+    /**
+     * @return an OAuth2 client if there is a stored session for this site, or a KSYNC_TOKEN in
+     * the environment; otherwise null, so the caller falls back to cookies or a password
+     */
+    public static OAuth2Client oauth2SessionOrNull(String url) {
+        if (StringUtils.isBlank(url)) {
+            return null;
         }
-        if (props.containsKey("userUrlHash")) {
-            map.put("miltonUserUrlHash", props.getProperty("userUrlHash"));
+        OAuth2Client oauth = newOAuth2Client(url);
+        return oauth.hasSession() ? oauth : null;
+    }
+
+    /**
+     * The ksync url points at a branch within a repository, but the OAuth2 endpoints live at the
+     * root of the website, so strip the path off.
+     */
+    static String baseUrlOf(String url) {
+        try {
+            java.net.URL u = new java.net.URL(url);
+            String base = u.getProtocol() + "://" + u.getHost();
+            if (u.getPort() > 0) {
+                base += ":" + u.getPort();
+            }
+            return base;
+        } catch (java.net.MalformedURLException ex) {
+            throw new RuntimeException("Not a valid url: " + url, ex);
+        }
+    }
+
+    /**
+     * The cookie login for a site, as milton cookie names, or an empty map if there is none.
+     * Reads the per-user credential store, not the checkout.
+     */
+    public static Map<String, String> getCookies(String url) {
+        Map<String, String> map = new HashMap<>();
+        if (StringUtils.isBlank(url)) {
+            return map;
+        }
+        try {
+            CredentialStore.Credentials creds = CredentialStore.defaultStore().get(baseUrlOf(url));
+            if (creds != null) {
+                if (StringUtils.isNotBlank(creds.userUrl)) {
+                    map.put("miltonUserUrl", creds.userUrl);
+                }
+                if (StringUtils.isNotBlank(creds.userUrlHash)) {
+                    map.put("miltonUserUrlHash", creds.userUrlHash);
+                }
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException("Could not read stored credentials", ex);
         }
         return map;
+    }
+
+    /**
+     * Moves a cookie login left behind by an older ksync out of the checkout and into the
+     * per-user store, then strips it from ksync.properties so the secret stops sitting
+     * somewhere a git commit can reach.
+     *
+     * Existing credentials for the host win, so re-running this cannot clobber a fresher login.
+     */
+    public static void migrateLegacyCredentials(String url, File repoDir) {
+        Properties props = readProps(repoDir);
+        String userUrl = props.getProperty("userUrl");
+        String userUrlHash = props.getProperty("userUrlHash");
+        if (StringUtils.isBlank(userUrl) && StringUtils.isBlank(userUrlHash)) {
+            return;
+        }
+        if (StringUtils.isBlank(url)) {
+            // without a url there is no host to key them by, so leave them be rather than
+            // dropping a working login on the floor
+            log.warn("Found a login in {} but no url to associate it with, leaving it in place", repoDir);
+            return;
+        }
+        try {
+            CredentialStore store = CredentialStore.defaultStore();
+            String host = baseUrlOf(url);
+            CredentialStore.Credentials creds = store.getOrCreate(host);
+            if (StringUtils.isBlank(creds.userUrl) && StringUtils.isBlank(creds.userUrlHash)) {
+                creds.userUrl = userUrl;
+                creds.userUrlHash = userUrlHash;
+                store.put(host, creds);
+                log.info("Your saved login for {} now lives in {}, instead of inside this checkout", host, store.getPath());
+            } else {
+                log.debug("Discarding the login in {}, the credential store already has one for {}", repoDir, host);
+            }
+            props.remove("userUrl");
+            props.remove("userUrlHash");
+            writeProps(props, repoDir);
+        } catch (IOException ex) {
+            throw new RuntimeException("Could not move the saved login into the credential store", ex);
+        }
     }
 
     @FunctionalInterface
@@ -156,7 +249,11 @@ public class KSyncUtils {
         if (StringUtils.isNotBlank(user)) {
             String oldUser = props.getProperty("user");
             if (oldUser != null && !oldUser.equals(user)) {
-                props.remove("userUrlHash"); // no longer valid if url is changing
+                // the saved login belongs to the previous user, so it is no longer valid
+                String forUrl = StringUtils.isNotBlank(url) ? url : props.getProperty("url");
+                if (StringUtils.isNotBlank(forUrl)) {
+                    clearLogin(forUrl);
+                }
             }
             props.put("user", user);
         }
@@ -165,21 +262,43 @@ public class KSyncUtils {
 
     public static void writeProps(Properties props, File repoDir) {
         File file = new File(repoDir, "ksync.properties");
-        log.info("writeProps: updating file {}", file.getAbsolutePath());
+        log.debug("writeProps: updating file {}", file.getAbsolutePath());
         try (FileOutputStream fout = new FileOutputStream(file)) {
             props.store(fout, null);
         } catch (Throwable e) {
-            System.out.println("Couldnt create props file: " + file.getAbsolutePath());
+            log.error("Could not write the properties file {}", file.getAbsolutePath(), e);
         }
     }
 
-    public static void writeLoginProps(String userUrl, String userUrlHash, File repoDir) {
-        repoDir.mkdirs();
-        Properties props = readProps(repoDir);
-        props.setProperty("userUrl", userUrl);
-        props.setProperty("userUrlHash", userUrlHash);
-        writeProps(props, repoDir);
-        System.out.println("Saved login props to " + repoDir.getAbsolutePath());
+    /** Records a cookie login for a site in the per-user credential store. */
+    public static void writeLoginProps(String userUrl, String userUrlHash, String url) {
+        try {
+            CredentialStore store = CredentialStore.defaultStore();
+            String host = baseUrlOf(url);
+            CredentialStore.Credentials creds = store.getOrCreate(host);
+            creds.userUrl = userUrl;
+            creds.userUrlHash = userUrlHash;
+            store.put(host, creds);
+            log.info("Saved login for {} to {}", host, store.getPath());
+        } catch (IOException ex) {
+            throw new RuntimeException("Could not save the login", ex);
+        }
+    }
+
+    /** Forgets the cookie login for a site, without touching any OAuth2 session. */
+    public static void clearLogin(String url) {
+        try {
+            CredentialStore store = CredentialStore.defaultStore();
+            String host = baseUrlOf(url);
+            CredentialStore.Credentials creds = store.get(host);
+            if (creds != null && (creds.userUrl != null || creds.userUrlHash != null)) {
+                creds.userUrl = null;
+                creds.userUrlHash = null;
+                store.put(host, creds);
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException("Could not clear the saved login", ex);
+        }
     }
 
     public static Properties readProps(File repoDir) {
@@ -195,7 +314,7 @@ public class KSyncUtils {
                 throw new RuntimeException(ex);
             }
         } else {
-            log.info("Properties file doesnt exist: {}", file.getAbsolutePath());
+            log.debug("Properties file doesnt exist: {}", file.getAbsolutePath());
         }
         return props;
     }

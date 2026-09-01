@@ -22,85 +22,53 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- was transitive via milton-cloud-sync; now direct deps of io/milton/sync sources moved in here -->
         <dependency>
             <groupId>io.milton</groupId>
-            <artifactId>milton-cloud-sync</artifactId>
-            <version>1.5.1.k3</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>voldermort</groupId>
-                    <artifactId>voldermort</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.springframework</groupId>
-                    <artifactId>spring-aop</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.springframework</groupId>
-                    <artifactId>spring-beans</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.springframework</groupId>
-                    <artifactId>spring-context</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>backport-util-concurrent</groupId>
-                    <artifactId>backport-util-concurrent</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>io.milton</groupId>
-                    <artifactId>cardme</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>concurrent</groupId>
-                    <artifactId>concurrent</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>io.milton</groupId>
-                    <artifactId>milton-api</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>com.googlecode.concurrentlinkedhashmap</groupId>
-                    <artifactId>concurrentlinkedhashmap-lru</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.httpcomponents</groupId>
-                    <artifactId>httpclient</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>commons-codec</groupId>
-                    <artifactId>commons-codec</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.mnode.ical4j</groupId>
-                    <artifactId>ical4j</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.mapdb</groupId>
-                    <artifactId>mapdb</artifactId>
-                </exclusion>
-            </exclusions>
+            <artifactId>milton-api</artifactId>
+            <version>2.8.0.1.k18</version>
+        </dependency>
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.7</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>29.0-jre</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-log4j12</artifactId>
-            <version>1.7.7</version>
-            <exclusions>
-                <exclusion>
-                    <artifactId>slf4j-api</artifactId>
-                    <groupId>org.slf4j</groupId>
-                </exclusion>
-                <exclusion>
-                    <artifactId>log4j</artifactId>
-                    <groupId>log4j</groupId>
-                </exclusion>
-            </exclusions>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+        </dependency>
+        <!-- log4j2. log4j 1.2.17 has been end of life since 2015 and carries CVEs in its
+             socket, jms and jdbc appenders; none were reachable here because ksync only ever
+             configured a ConsoleAppender, but the classes still shipped in the jar. -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
         </dependency>
         <dependency>
-            <groupId>log4j</groupId>
-            <artifactId>log4j</artifactId>
-            <version>1.2.17</version>
-            <type>jar</type>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <!-- routes slf4j, which is what all of our own code logs through -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <!-- routes commons-logging, which is what httpclient logs through. Without this its
+             output bypasses our config entirely and the ResponseProcessCookies suppression
+             below stops working, bringing the cookie warnings back. -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-jcl</artifactId>
+            <version>${log4j.version}</version>
         </dependency>
         <dependency>
             <artifactId>junit</artifactId>
@@ -119,6 +87,11 @@
             <version>3.4</version>
             <type>jar</type>
         </dependency>
+        <!-- Unmaintained since 2013 and calls sun.misc.Unsafe, which makes a current jvm print a
+             deprecation warning on every run. We no longer construct one - MemoryHashCache uses
+             guava and every Host is given a map for its cache - but milton-client's other Host
+             constructors still fall back to it, so removing the jar would turn a cosmetic warning
+             into a NoClassDefFoundError. Kept on the classpath, never instantiated. -->
         <dependency>
             <groupId>com.googlecode.concurrentlinkedhashmap</groupId>
             <artifactId>concurrentlinkedhashmap-lru</artifactId>
@@ -133,6 +106,38 @@
             <groupId>io.milton</groupId>
             <artifactId>milton-client</artifactId>
             <version>2.8.0.1.k28</version>
+            <exclusions>
+                <!-- only used by the CalDav/CardDav bean mappers, which ksync never touches.
+                     ical4j drags in groovy-all, bndlib and osgi: ~15MB of the shaded jar. -->
+                <exclusion>
+                    <groupId>org.mnode.ical4j</groupId>
+                    <artifactId>ical4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.milton</groupId>
+                    <artifactId>cardme</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- ksync uses JSONObject/JSONArray directly; was only arriving via milton-client -->
+        <dependency>
+            <groupId>net.sf.json-lib</groupId>
+            <artifactId>json-lib</artifactId>
+            <version>2.4</version>
+            <classifier>jdk15</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.jdom</groupId>
+            <artifactId>jdom</artifactId>
+            <version>2.0.2</version>
+        </dependency>
+        <!-- OAuth2.1 client: discovery, PKCE, token exchange and dynamic client registration.
+             The heavyweight parts of this sdk (opensaml, tink, bouncycastle, xmlsec) are all
+             optional deps and are not pulled in; the tree is 8 jars, ~1.9MB. -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>oauth2-oidc-sdk</artifactId>
+            <version>11.38.2</version>
         </dependency>
         <dependency>
             <groupId>com.sleepycat</groupId>
@@ -167,6 +172,8 @@
                                     <exclude>io.milton:cardme*</exclude>
                                     <exclude>org.mnode*</exclude>
                                     <exclude>aopalliance:aopalliance</exclude>
+                                    <exclude>log4j:log4j</exclude>
+                                    <exclude>org.slf4j:slf4j-log4j12</exclude>
                                 </excludes>
                             </artifactSet>
                             <filters>
@@ -196,5 +203,6 @@
     </build>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <log4j.version>2.26.1</log4j.version>
     </properties>
 </project>

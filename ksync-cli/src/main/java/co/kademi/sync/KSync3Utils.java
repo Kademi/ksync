@@ -10,12 +10,16 @@ import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
  * @author brad
  */
 public class KSync3Utils {
+
+    private static final Logger log = LoggerFactory.getLogger(KSync3Utils.class);
 
     public static String makeFileName(String url) {
         String fname = url.replace("/", "-");
@@ -112,7 +116,7 @@ public class KSync3Utils {
         }
         String s = line.getOptionValue("appname");
         if(StringUtils.isNotEmpty(appDir) && StringUtils.isEmpty(s)) {
-            System.out.println("KSync3: appname option is required when using Ksync uri");
+            log.error("The appname option is required when using a ksync uri");
             System.exit(0);
         }
 
@@ -120,7 +124,7 @@ public class KSync3Utils {
             curDir = curDir +"/"+ s;
             File f = new File(curDir);
             if(!f.exists()) {
-                System.out.println("Cannot find app directory in users home. Creating now..");
+                log.info("Creating the app directory {}", curDir);
                 f.mkdir();
             }
         }

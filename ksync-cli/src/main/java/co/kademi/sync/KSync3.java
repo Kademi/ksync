@@ -10,6 +10,8 @@ import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
 import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
+import co.kademi.sync.oauth.NotLoggedInException;
+import co.kademi.sync.oauth.OAuth2Client;
 import io.milton.httpclient.HttpException;
 import io.milton.httpclient.HttpResult;
 import io.milton.sync.HttpBlobStore;
@@ -33,6 +35,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.FileSystems;
 import java.nio.file.WatchService;
+import java.util.Properties;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -110,12 +113,12 @@ public class KSync3 {
 
         // Check how many arguments were passed in
         if (arg == null || arg.length == 0) {
-            System.out.println("Cannot find any arguments. Please provide argumetns to ksync3.jar");
+            log.error("No arguments given. Run ksync3 -command usage to see the options");
             System.exit(0);
         }
 
         if (KSyncUri.isUri(arg)) {
-            System.out.println("KSync3: Found URI Schema, parsing arguments");
+            log.debug("Found a ksync uri, parsing its arguments");
             arg = KSyncUri.parseArguments(arg);
         }
 
@@ -143,6 +146,9 @@ public class KSync3 {
         options.addOption("auth", true, "An encrypted token from the server which provides authentication");
         options.addOption("appname", true, "app name for creating folder in app directory");
         options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
+        options.addOption("debug", false, "Verbose output: show debug logging, with the level and source class on each line");
+        options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
+        options.addOption("logout", false, "Discard the stored OAuth2 tokens (for the login command)");
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
         try {
@@ -155,6 +161,8 @@ public class KSync3 {
             return;
         }
 
+        configureLogging(KSync3Utils.getBooleanInput(line, "debug"));
+
         Command cmd = KSync3Utils.findCommand(line, commands);
 
         if (cmd == null) {
@@ -165,6 +173,12 @@ public class KSync3 {
         try {
             cmd.execute(options, line);
         } catch (Exception ex) {
+            NotLoggedInException notLoggedIn = NotLoggedInException.find(ex);
+            if (notLoggedIn != null) {
+                // nothing in the stack trace helps the person reading it; they just need to log in
+                log.error(notLoggedIn.getMessage());
+                System.exit(1);
+            }
             log.error("Exception running command {} - {}", cmd.getName(), ex.getMessage(), ex);
             System.exit(1);
         }
@@ -311,26 +325,62 @@ public class KSync3 {
         }
     }
 
+    /**
+     * Normal runs print the message alone; the level and class name only help when something is
+     * being diagnosed, and they bury the lines a user actually wants. -debug brings both back and
+     * turns the level up.
+     */
+    private static void configureLogging(boolean debug) {
+        if (!debug) {
+            return;
+        }
+        // log4j2 resolves ${sys:ksync.logPattern} when it builds the layout, which has already
+        // happened by now because our static loggers initialised it. Setting the property and
+        // reconfiguring is what makes the new pattern take effect.
+        System.setProperty("ksync.logPattern", "%-5p %c - %m%n");
+        org.apache.logging.log4j.core.config.Configurator.reconfigure();
+        // Only our own code, not every library: turning httpclient up to debug buries everything
+        // in wire logging nobody asked for.
+        org.apache.logging.log4j.core.config.Configurator.setLevel("co.kademi", org.apache.logging.log4j.Level.DEBUG);
+        org.apache.logging.log4j.core.config.Configurator.setLevel("io.milton.sync", org.apache.logging.log4j.Level.DEBUG);
+        log.debug("Debug logging enabled");
+    }
+
     public static void showUsage(Options options) {
         HelpFormatter formatter = new HelpFormatter();
         formatter.printHelp("ksync3", options);
     }
 
     private static void login(Options options, CommandLine line) throws Exception {
-        log.info("Running login command..");
+        log.info("Signing in..");
         KSyncUtils.withDir((File dir) -> {
-            String url = KSync3Utils.getInput(options, line, "url", null);
-            String user = KSync3Utils.getInput(options, line, "user", null);
+            File repoDir = new File(dir, ".ksync");
+            repoDir.mkdirs();
+            Properties props = KSyncUtils.readProps(repoDir);
+            String url = KSync3Utils.getInput(options, line, "url", props, true);
+
+            if (KSync3Utils.getBooleanInput(line, "logout")) {
+                KSyncUtils.newOAuth2Client(url).logout();
+                log.info("Logged out, stored credentials for this site discarded");
+                return;
+            }
+
+            if (KSync3Utils.getBooleanInput(line, "oauth")) {
+                KSyncUtils.writeProps(url, null, repoDir);
+                KSyncUtils.newOAuth2Client(url).login();
+                return;
+            }
+
+            String user = KSync3Utils.getInput(options, line, "user", props, true);
             String pwd = KSync3Utils.getPassword(line, url, user);
 
-            File repoDir = new File(dir, ".ksync");
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
             kSync3.login(null);
         }, options, line);
     }
 
     private static void checkout(Options options, CommandLine line) throws Exception {
-        log.info("Running checkout command..");
+        log.info("Checking out..");
 
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
@@ -348,9 +398,9 @@ public class KSync3 {
     }
 
     private static void push(Options options, CommandLine line) throws Exception {
-        log.info("Running push command..");
+        log.info("Pushing local changes..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
-            log.info("do push {}", configDir);
+            log.debug("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
         }, line, options, false);
@@ -358,17 +408,17 @@ public class KSync3 {
     }
 
     private static void sync(Options options, CommandLine line) throws Exception {
-        log.info("Running sync command..");
+        log.info("Syncing..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.start();
             k.showErrors();
         }, line, options, true);
-        System.out.println("finished initial scan");
+        log.info("Finished the initial scan");
 
     }
 
     private static void pull(Options options, CommandLine line) throws Exception {
-        log.info("Running pull command..");
+        log.info("Pulling changes from the server..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
@@ -377,7 +427,7 @@ public class KSync3 {
                 log.error("ex", ex);
             }
         }, line, options, false);
-        System.out.println("finished");
+        log.info("Done");
         System.exit(0); // threads arent shutting down
     }
 
@@ -408,26 +458,37 @@ public class KSync3 {
     private final ScheduledExecutorService scheduledExecutorService;
 
     private final List<String> errors = new ArrayList<>();
+    private final String remoteAddress;
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
+        this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, null);
+    }
+
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException, IOException {
         this.localDir = localDir;
         this.configDir = configDir;
         this.ignores = ignores;
+        this.remoteAddress = sRemoteAddress;
         eventManager = new EventManagerImpl();
 
         int timeout = 180000;
         URL url = new URL(sRemoteAddress);
-        client = new Host(url.getHost(), null, url.getPort(), user, pwd, null, timeout, null, null);
-
-        if (cookies != null && cookies.isEmpty()) {
-            client.setUsePreemptiveAuth(true);
+        if (oauth != null) {
+            // Bearer auth carries the identity, so no cookies and no Basic auth
+            client = new BearerHost(url.getHost(), null, url.getPort(), user, oauth::accessToken, timeout);
+            cookies = null;
         } else {
-            client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
+            client = new Host(url.getHost(), null, url.getPort(), user, pwd, null, timeout, new java.util.concurrent.ConcurrentHashMap<>(), null);
+            if (cookies != null && cookies.isEmpty()) {
+                client.setUsePreemptiveAuth(true);
+            } else {
+                client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
+            }
         }
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
         client.setTimeout(timeout);
-        log.info("Using timeout of " + timeout + "ms");
+        log.debug("Using timeout of " + timeout + "ms");
         client.setUseDigestForPreemptiveAuth(false);
         branchPath = url.getFile();
         if (cookies != null) {
@@ -460,7 +521,7 @@ public class KSync3 {
         wrappedBlobStore = new MultipleBlobStore(Arrays.asList(localBlobStore, httpBlobStore));
         wrappedHashStore = new MultipleHashStore(Arrays.asList(localHashStore, httpHashStore));
 
-        log.info("Init {}", localDir.getAbsolutePath());
+        log.debug("Init {}", localDir.getAbsolutePath());
 
         scheduledExecutorService = Executors.newScheduledThreadPool(1);
         final java.nio.file.Path path = FileSystems.getDefault().getPath(localDir.getAbsolutePath());
@@ -483,7 +544,7 @@ public class KSync3 {
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
             if (background) {
                 try {
-                    log.info("File changed in {}, new repo hash {}", localDir, rootHash);
+                    log.debug("File changed in {}, new repo hash {}", localDir, rootHash);
                     push(rootHash, configDir);
 
                 } catch (Exception ex) {
@@ -502,11 +563,11 @@ public class KSync3 {
         tripletStore.scan();
         log.info("Done initial scan, now begin monitoring..");
         tripletStore.start();
-        log.info("Done monitor init");
+        log.debug("Done monitor init");
     }
 
     private void login(String secondFactor) {
-        log.info("login");
+        log.debug("login");
 
         HttpClient hc = this.client.getClient();
         HttpPost m = new HttpPost(this.client.baseHref());
@@ -540,7 +601,7 @@ public class KSync3 {
                     log.info("Authentication failed. Is your userid correct?");
                     break;
                 case 200:
-                    log.info("login: completed {}", res);
+                    log.debug("login: completed {}", res);
                     // save auth token cookie to props file
                     boolean foundCookie = false;
                     List<String> cookies = new ArrayList<>();
@@ -554,7 +615,7 @@ public class KSync3 {
                     }
                     //List<String> cookies = result.getHeaderValues("Set-Cookie");
                     for (String setCookie : cookies) {
-                        log.info("cookies: {}", setCookie);
+                        log.debug("Parsing a Set-Cookie header from the login response");
                         // miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
                         // miltonUserUrlHash="YYY-XXX-YYY-ZZZ-XXX:DDDD"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
                         String[] arr = setCookie.split("\"");
@@ -562,7 +623,7 @@ public class KSync3 {
                         if (cookieName.startsWith("miltonUserUrlHash")) {
                             String userUrlHash = arr[1];
                             String userUrl = "/users/" + this.client.user + "/";
-                            KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
+                            KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.remoteAddress);
                             foundCookie = true;
                             break;
                         }
@@ -571,17 +632,17 @@ public class KSync3 {
                         // Now try using the format where all cookies are in one line:
                         // miltonUserUrl=b64L3VzZXJzL2thZGVtaWJyYWQv; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT, miltonUserUrlHash="dd-dd-dd-dd-dd:ddd"; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT; HttpOnly
                         for (String setCookie : cookies) {
-                            log.info("cookies.2: {}", setCookie);
+                            log.debug("Parsing a combined Set-Cookie header from the login response");
                             String key = "miltonUserUrlHash=\"";
                             int pos = setCookie.indexOf(key);
                             if (pos > 0) {
                                 String hash = setCookie.substring(pos + key.length());
-                                log.info("login: cookie.1: {}", hash);
+                                // deliberately not logged: this is the auth hash itself
                                 hash = hash.substring(0, hash.indexOf("\""));
-                                log.info("login: cookie.2: {}", hash);
+                                
                                 String userUrlHash = hash;
                                 String userUrl = "/users/" + this.client.user + "/";
-                                KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.repoDir);
+                                KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.remoteAddress);
                                 foundCookie = true;
                                 break;
                             }
@@ -669,7 +730,7 @@ public class KSync3 {
         walkLocalVfs(localRootHash, httpBlobStore, httpHashStore, Path.root);
 
         // wait for threads to complete
-        log.info("Wait for push transfers to complete..");
+        log.debug("Wait for push transfers to complete..");
         while (transferQueueCounter.count > 0) {
             Thread.sleep(300);
         }
@@ -680,7 +741,7 @@ public class KSync3 {
         params.put("newHash", localRootHash);
         params.put("validate", "true");
         try {
-            log.info("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
+            log.debug("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
             String res = client.post(branchPath, params);
             JSONObject jsonRes = JSONObject.fromObject(res);
             Object statusOb = jsonRes.get("status");
@@ -692,17 +753,17 @@ public class KSync3 {
                     return;
                 }
             }
-            log.info("Push failed: Check for missing objects", res);
+            log.warn("Push failed: Check for missing objects", res);
             // todo: check status
             Object dataOb = jsonRes.get("data");
-            System.out.println("data: " + dataOb);
+            log.debug("Push failure payload: {}", dataOb);
             JSONObject data = (JSONObject) dataOb;
             JSONArray missingChunksArr = (JSONArray) data.get("missingChunkFanouts");
 
             JSONArray missingBlobsArr = (JSONArray) data.get("missingBlobs");
             KSyncUtils.processHashes(missingBlobsArr, (String hash) -> {
                 byte[] arr = localBlobStore.getBlob(hash);
-                log.info("Upload missing blob {} size={} to blobstore={}", hash, arr.length, httpBlobStore);
+                log.debug("Upload missing blob {} size={} to blobstore={}", hash, arr.length, httpBlobStore);
                 try {
                     httpBlobStore.setForce(true);
                     httpBlobStore.setBlob(hash, arr);
@@ -712,7 +773,7 @@ public class KSync3 {
             });
 
             KSyncUtils.processHashes(missingChunksArr, (String hash) -> {
-                log.info("Upload missing chunk fanout {}", hash);
+                log.debug("Upload missing chunk fanout {}", hash);
                 Fanout fanout = localHashStore.getChunkFanout(hash);
                 try {
                     httpHashStore.setForce(true);
@@ -724,7 +785,7 @@ public class KSync3 {
 
             JSONArray missingFileFanoutsArr = (JSONArray) data.get("missingFileFanouts");
             KSyncUtils.processHashes(missingFileFanoutsArr, (String hash) -> {
-                log.info("Upload missing file fanout {}", hash);
+                log.debug("Upload missing file fanout {}", hash);
                 Fanout fanout = localHashStore.getFileFanout(hash);
                 try {
                     httpHashStore.setForce(true);
@@ -747,7 +808,7 @@ public class KSync3 {
         //log.info("walk local vfs: {}", p);
         byte[] dirListBlob = localBlobStore.getBlob(dirHash);
         if (!httpBlobStore.hasBlob(dirHash)) {
-            log.info("Push directory list for {}", p);
+            log.debug("Push directory list for {}", p);
             //httpBlobStore.setBlob(dirHash, dirListBlob);
             transferQueueCounter.up();
             transferExecutor.submit(() -> {
@@ -757,7 +818,7 @@ public class KSync3 {
                 transferQueueCounter.down();
                 //System.out.println("done upload " + dirHash);
                 tm = System.currentTimeMillis() - tm;
-                log.info("Transferred blob in {} ms", tm);
+                log.debug("Transferred blob in {} ms", tm);
             });
         }
 
@@ -812,7 +873,7 @@ public class KSync3 {
                             c.up();
                             transferQueueCounter.up();
                             transferExecutor.submit(() -> {
-                                log.info("transfer blob for file {} with size {} bytes", filePath, arr.length);
+                                log.debug("transfer blob for file {} with size {} bytes", filePath, arr.length);
                                 destBlobStore.setBlob(hash, arr);
                                 c.down();
                                 transferQueueCounter.down();
@@ -828,7 +889,7 @@ public class KSync3 {
                         c.up();
                         transferQueueCounter.up();
                         transferExecutor.submit(() -> {
-                            log.info("Transfer chunk for file {}", filePath);
+                            log.debug("Transfer chunk for file {}", filePath);
                             destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                             c.down();
                             transferQueueCounter.down();
@@ -842,7 +903,7 @@ public class KSync3 {
                     destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
                 } else {
                     // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-                    log.info("Waiting for transfers to complete");
+                    log.debug("Waiting for transfers to complete");
                     while (c.count > 0) {
                         Thread.sleep(1000);
                     }
@@ -935,18 +996,18 @@ public class KSync3 {
         try {
             startFileDownloads();
             _fetch(filePath, hash, ignores);
-            log.info("Waiting for file downloads to finish.");
+            log.debug("Waiting for file downloads to finish.");
             while (!areDownloadsFinished()) {
                 Thread.sleep(500);
             }
         } finally {
             stopFileDownloads();
         }
-        log.info("fetch finished");
+        log.debug("fetch finished");
     }
 
     private void _fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
-        log.info("fetch: {}", filePath);
+        log.debug("fetch: {}", filePath);
         List<ITriplet> triplets;
         try {
             triplets = getTriplets(hash, wrappedBlobStore);
@@ -1020,9 +1081,9 @@ public class KSync3 {
     }
 
     private void pull(String hash, File dir, List<String> ignores) {
-        log.info("pull: " + dir.getAbsolutePath());
+        log.debug("pull: " + dir.getAbsolutePath());
         if (hash == null) {
-            log.info("pull: hash is null, so nothing");
+            log.debug("pull: hash is null, so nothing");
             return;
         }
         List<ITriplet> triplets;
@@ -1047,7 +1108,7 @@ public class KSync3 {
                         Fanout fileFanout = localHashStore.getFileFanout(t.getHash());
                         if (fileFanout != null) {
                             try (FileOutputStream fout = new FileOutputStream(dest)) {
-                                log.info("write local file: {}", dest.getAbsolutePath());
+                                log.debug("write local file: {}", dest.getAbsolutePath());
                                 c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
                             } catch (IOException ex) {
                                 throw new RuntimeException(ex);
@@ -1082,7 +1143,7 @@ public class KSync3 {
         } catch (IOException ex) {
             log.error("Ex", ex);
         } catch (InterruptedException ex) {
-            log.info("Interrupted", ex);
+            log.warn("Interrupted", ex);
         }
     }
 

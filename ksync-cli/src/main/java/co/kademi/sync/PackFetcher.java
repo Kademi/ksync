@@ -81,7 +81,7 @@ public class PackFetcher {
      */
     public boolean fetch(String rootHash) {
         if (rootHash == null || rootHash.isEmpty() || "null".equals(rootHash)) {
-            log.info("fetchPack: no root hash, nothing to fetch");
+            log.debug("fetchPack: no root hash, nothing to fetch");
             return true; // empty repository, nothing to do and nothing to fall back to
         }
         // doGet takes a full url rather than a path, the same way Host.get(Path) builds one before calling through
@@ -94,13 +94,13 @@ public class PackFetcher {
             // again, which is harmless because writing them is idempotent.
             long skip = objectCount;
             String url = skip > 0 ? baseUrl + "?skip=" + skip : baseUrl;
-            log.info("Downloading repository objects from {}", url);
+            log.debug("Downloading repository objects from {}", url);
             try {
                 client.doGet(url, (InputStream in) -> {
                     readPack(in);
                 }, null, null);
             } catch (NotFoundException e) {
-                log.info("This server does not support pack downloads, falling back to fetching objects one at a time");
+                log.debug("This server does not support pack downloads, falling back to fetching objects one at a time");
                 return false;
             } catch (Exception e) {
                 log.warn("Pack download failed after {} objects: {}", objectCount, e.getMessage(), e);
@@ -108,7 +108,7 @@ public class PackFetcher {
 
             // The root blob is written last, so having it means we read the stream through to the end
             if (localBlobStore.hasBlob(rootHash)) {
-                log.info("Downloaded {} objects, {} bytes in {}ms", objectCount, byteCount, System.currentTimeMillis() - tm);
+                log.debug("Downloaded {} objects, {} bytes in {}ms", objectCount, byteCount, System.currentTimeMillis() - tm);
                 return true;
             }
 
@@ -116,7 +116,7 @@ public class PackFetcher {
                 log.warn("Pack download made no progress, falling back to fetching objects one at a time");
                 return false;
             }
-            log.info("Pack download was incomplete, resuming from object {}", objectCount);
+            log.debug("Pack download was incomplete, resuming from object {}", objectCount);
         }
 
         log.warn("Gave up on the pack after {} attempts, falling back to fetching objects one at a time", MAX_ATTEMPTS);
@@ -152,7 +152,7 @@ public class PackFetcher {
                 Fanout f = readFanout(data);
                 localHashStore.setFileFanout(name.substring(PREFIX_FILE_FANOUT.length()), f.getHashes(), f.getActualContentLength());
             } else if (ENTRY_MANIFEST.equals(name)) {
-                log.info("Pack manifest: {}", new String(data, "UTF-8").trim().replace("\n", ", "));
+                log.debug("Pack manifest: {}", new String(data, "UTF-8").trim().replace("\n", ", "));
                 continue; // not an object
             } else if (ENTRY_MISSING.equals(name)) {
                 for (String line : new String(data, "UTF-8").split("\n")) {
@@ -167,7 +167,7 @@ public class PackFetcher {
             }
             objectCount++;
             if (objectCount % PROGRESS_INTERVAL == 0) {
-                log.info("..received {} objects, {} bytes", objectCount, byteCount);
+                log.debug("..received {} objects, {} bytes", objectCount, byteCount);
             }
         }
     }

@@ -52,7 +52,7 @@ public class LazyHashCache implements HashCache {
         if (!initialised) {
             initialised = true;
             try {
-                log.info("Fetching {}...", name);
+                log.debug("Fetching {}...", name);
                 delegate = supplier.get();
             } catch (Exception e) {
                 log.warn("Unable to load {}, so things will be a bit slow: {}", name, e.getMessage());
