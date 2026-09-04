@@ -206,6 +206,26 @@ public class DeltaGeneratorDeltasTest {
         assertTrue(events.toString(), events.contains("created /added/inside.txt"));
     }
 
+    /**
+     * A named target listing that is not in the store used to come back as null, which
+     * reads as an empty directory - and the listener turns that into a delete for every
+     * file in it. It has to fail instead.
+     */
+    @Test
+    public void testMissingTargetListingFailsRatherThanDeletingEverything() throws Exception {
+        MemoryBlobStore store = new MemoryBlobStore();
+        String base = dir(store, new T("a.txt", H_A, "f"));
+        String working = dir(store, new T("a.txt", H_A, "f"));
+        String absent = "4444444444444444444444444444444444444444";
+
+        try {
+            run(store, base, absent, working);
+            fail("a missing target listing must not be treated as an empty directory");
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains(absent));
+        }
+    }
+
     /** No working hash at all means no conflict detection is possible, so update. */
     @Test
     public void testNoWorkingHashUpdates() throws Exception {

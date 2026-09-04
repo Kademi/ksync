@@ -210,10 +210,14 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>2.3.2</version>
+                <!-- 3.6+ for <release>, which 2.3.2 ignores silently -->
+                <version>3.14.0</version>
                 <configuration>
-                    <source>11</source>
-                    <target>11</target>
+                    <!-- release, not source/target: source/target compiles against the host
+                         jdk's api while emitting older bytecode, so a build on a modern jdk
+                         happily links java 17+ methods that then fail at runtime on java 11.
+                         release checks against the real java 11 api. -->
+                    <release>11</release>
                 </configuration>
             </plugin>
         </plugins>

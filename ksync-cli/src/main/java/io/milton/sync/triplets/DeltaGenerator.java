@@ -57,37 +57,30 @@ public class DeltaGenerator {
     public void generateDeltas(String hash1, String hash2, String workingDirHash, Path path) throws IOException {
         log.debug("generateDeltas path={}", path);
         // find the dir listing for each hash
-        List<ITriplet> triplets1 = readListing(hash1, true);
-        // A missing target listing is tolerated, as it always has been: the caller gets
-        // deletes for everything in triplets1 and nothing else.
-        List<ITriplet> triplets2 = readListing(hash2, false);
-        // The working directory listing comes from workingDirHash. It used to be read
-        // from hash1, which made tripletWorkingHash equal to the base hash for every
-        // entry - so every changed file failed the "did the local copy change" test and
-        // was reported as a conflict. In ksync3 that meant a plain pull prompted the
-        // user about a local change they had not made, for every updated file.
-        List<ITriplet> tripletsWorkingDir = readListing(workingDirHash, true);
+        List<ITriplet> triplets1 = readListing(hash1);
+        List<ITriplet> triplets2 = readListing(hash2);
+        // The working listing used to be read from hash1, which made tripletWorkingHash
+        // equal to the base hash for every entry, so a plain pull reported a conflict on
+        // every updated file.
+        List<ITriplet> tripletsWorkingDir = readListing(workingDirHash);
 
         generateDeltas(triplets1, triplets2, tripletsWorkingDir, path);
     }
 
     /**
-     * Reads and parses a directory listing blob. Null hash means no listing. A named
-     * but absent blob throws when required, which is what the base and working
-     * listings have always done - losing them silently would mean losing the
-     * information conflict detection depends on.
+     * Reads and parses a directory listing blob. A null hash means there is no listing:
+     * the base and working hashes are null before the first pull, and a target subtree
+     * hash is null for a newly created directory. A named but absent blob is an error -
+     * treating it as an empty listing would delete everything the listing contained.
      */
-    private List<ITriplet> readListing(String hash, boolean required) throws IOException {
+    private List<ITriplet> readListing(String hash) throws IOException {
         if (hash == null) {
             return null;
         }
         byte[] blob = blobStore.getBlob(hash);
         if (blob == null) {
-            if (required) {
-                log.warn("Could not locate blob: {}", hash);
-                throw new RuntimeException("Could not locate blob: " + hash + " in blob store: " + blobStore);
-            }
-            return null;
+            log.warn("Could not locate blob: {}", hash);
+            throw new RuntimeException("Could not locate blob: " + hash + " in blob store: " + blobStore);
         }
         return hashCalc.parseTriplets(new ByteArrayInputStream(blob));
     }

@@ -6,20 +6,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Console replacement for the original SwingConflictResolver, which popped a modal
- * dialog and so could not work in a headless CLI. Same choices and same
- * "remember my answer for N seconds" behaviour, asked on stdin instead.
+ * Asks about a conflict on the terminal instead of in a dialog. Same choices and the same
+ * "remember my answer for N seconds" behaviour as {@link GuiConflictResolver}; see
+ * {@link ConflictResolvers} for when it is used.
  */
-public class ConsoleConflictResolver {
+public class ConsoleConflictResolver implements ConflictResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleConflictResolver.class);
-
-    public enum ConflictChoice {
-
-        LOCAL,
-        REMOTE,
-        NOTHING
-    }
 
     public ConflictChoice choice = null;
     public Integer rememberSecs;
@@ -40,6 +33,7 @@ public class ConsoleConflictResolver {
      * @param defaultSecs seconds to remember the answer for, offered as the default
      * @return the choice, or NOTHING if there is no one to ask
      */
+    @Override
     public synchronized ConflictChoice showConflictResolver(String message, Integer defaultSecs) {
         System.out.println();
         System.out.println("CONFLICT: " + message);
@@ -72,6 +66,7 @@ public class ConsoleConflictResolver {
         return choice;
     }
 
+    @Override
     public Integer getRememberSecs() {
         return rememberSecs;
     }

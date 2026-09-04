@@ -10,6 +10,7 @@ import io.milton.http.exceptions.NotAuthorizedException;
 import io.milton.http.exceptions.NotFoundException;
 import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
+import io.milton.sync.ConflictResolvers;
 import co.kademi.sync.oauth.NotLoggedInException;
 import co.kademi.sync.oauth.OAuth2Client;
 import io.milton.httpclient.HttpException;
@@ -97,6 +98,9 @@ public class KSync3 {
 
     private static final Logger log = LoggerFactory.getLogger(KSync3.class);
 
+    /** How conflicts are asked about, from -conflictmode. */
+    private static ConflictResolvers.Mode conflictMode = ConflictResolvers.Mode.AUTO;
+
     private static final List<Command> commands = new ArrayList<>();
 
     static {
@@ -146,6 +150,7 @@ public class KSync3 {
         options.addOption("auth", true, "An encrypted token from the server which provides authentication");
         options.addOption("appname", true, "app name for creating folder in app directory");
         options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
+        options.addOption("conflictmode", true, "How to ask about file conflicts: gui (a dialog, the default), console (a terminal prompt, for CI or an agent), or auto");
         options.addOption("debug", false, "Verbose output: show debug logging, with the level and source class on each line");
         options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
         options.addOption("logout", false, "Discard the stored OAuth2 tokens (for the login command)");
@@ -162,6 +167,7 @@ public class KSync3 {
         }
 
         configureLogging(KSync3Utils.getBooleanInput(line, "debug"));
+        conflictMode = ConflictResolvers.parseMode(line.getOptionValue("conflictmode"));
 
         Command cmd = KSync3Utils.findCommand(line, commands);
 
@@ -965,7 +971,8 @@ public class KSync3 {
             return null;
         }
 
-        DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore));
+        DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore,
+                ConflictResolvers.create(conflictMode)));
         dg.generateDeltas(lastRemoteHash, remoteHash, localHash); // calc changes and apply them to the working directory
 
         log.info("Finished pull, save hash " + remoteHash);

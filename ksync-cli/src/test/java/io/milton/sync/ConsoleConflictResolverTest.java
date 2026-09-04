@@ -1,6 +1,6 @@
 package io.milton.sync;
 
-import io.milton.sync.ConsoleConflictResolver.ConflictChoice;
+import io.milton.sync.ConflictResolver.ConflictChoice;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;

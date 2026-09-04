@@ -1,7 +1,7 @@
 package io.milton.sync.triplets;
 
 import io.milton.common.Path;
-import io.milton.sync.ConsoleConflictResolver;
+import io.milton.sync.ConflictResolver;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -27,16 +27,11 @@ public class FileUpdatingMergingDeltaListener implements DeltaGenerator.DeltaLis
     private final BlobStore blobStore;
     private Long choiceTimeout;
     private Integer rememberSecs;
-    private ConsoleConflictResolver.ConflictChoice choice;
-    private ConsoleConflictResolver conflictResolver = new ConsoleConflictResolver();
+    private ConflictResolver.ConflictChoice choice;
+    private final ConflictResolver conflictResolver;
 
-    public FileUpdatingMergingDeltaListener() {
-        this.root = null;
-        this.hashStore = null;
-        this.blobStore = null;
-    }
-
-    public FileUpdatingMergingDeltaListener(File root, HashStore hashStore, BlobStore blobStore) {
+    public FileUpdatingMergingDeltaListener(File root, HashStore hashStore, BlobStore blobStore, ConflictResolver conflictResolver) {
+        this.conflictResolver = conflictResolver;
         this.root = root;
         this.hashStore = hashStore;
         this.blobStore = blobStore;
@@ -122,7 +117,7 @@ public class FileUpdatingMergingDeltaListener implements DeltaGenerator.DeltaLis
         File localChild = new File(dir, triplet2.getName());
 
         // Check if we have a non-expired timeout
-        ConsoleConflictResolver.ConflictChoice n;
+        ConflictResolver.ConflictChoice n;
         if (this.choice != null && System.currentTimeMillis() < choiceTimeout) {
             n = choice;
         } else {
@@ -134,9 +129,9 @@ public class FileUpdatingMergingDeltaListener implements DeltaGenerator.DeltaLis
                 choiceTimeout = System.currentTimeMillis() + rememberSecs * 1000L;
             }
         }
-        if (n == ConsoleConflictResolver.ConflictChoice.LOCAL) {
+        if (n == ConflictResolver.ConflictChoice.LOCAL) {
             // do nothing, leave file as it is
-        } else if (n == ConsoleConflictResolver.ConflictChoice.REMOTE) {
+        } else if (n == ConflictResolver.ConflictChoice.REMOTE) {
             // take the remote file and update local
             // todo: use a diff/merge tool like https://github.com/albfan/jmeld, or https://www.guiffy.com/help/GuiffyHelp/doc/com/guiffy/inside/GuiffyDiff.html
             doUpdated(path, triplet2);
