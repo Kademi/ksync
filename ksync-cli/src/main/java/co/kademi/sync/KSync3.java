@@ -43,6 +43,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -111,6 +112,7 @@ public class KSync3 {
         commands.add(new SyncCommand());
         commands.add(new PublishCommand());
         commands.add(new LoginCommand());
+        commands.add(new IgnoreCommand());
     }
 
     public static void main(String[] arg) {
@@ -152,8 +154,10 @@ public class KSync3 {
         options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
         options.addOption("conflictmode", true, "How to ask about file conflicts: gui (a dialog, the default), console (a terminal prompt, for CI or an agent), or auto");
         options.addOption("debug", false, "Verbose output: show debug logging, with the level and source class on each line");
+        options.addOption("logformat", true, "Shape of each log line: plain (the message alone, the default), ts (an ISO-8601 UTC timestamp and level first) or kv (ts=.. level=.. msg=\"..\", for a log reader)");
         options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
         options.addOption("logout", false, "Discard the stored OAuth2 tokens (for the login command)");
+        options.addOption("pattern", true, "File/folder name or glob to add to the global ignore file, eg *.log or node_modules. Comma seperated for several (for the ignore command). Lists the file when omitted");
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
         try {
@@ -166,8 +170,16 @@ public class KSync3 {
             return;
         }
 
-        configureLogging(KSync3Utils.getBooleanInput(line, "debug"));
-        conflictMode = ConflictResolvers.parseMode(line.getOptionValue("conflictmode"));
+        // Both of these reject an unknown value by name. That is a typo in the command line, not a
+        // fault worth a stack trace, so report it the same way a parse failure is reported.
+        try {
+            configureLogging(KSync3Utils.getBooleanInput(line, "debug"), line.getOptionValue("logformat"));
+            conflictMode = ConflictResolvers.parseMode(line.getOptionValue("conflictmode"));
+        } catch (IllegalArgumentException ex) {
+            log.error(ex.getMessage());
+            System.exit(1);
+            return;
+        }
 
         Command cmd = KSync3Utils.findCommand(line, commands);
 
@@ -331,25 +343,76 @@ public class KSync3 {
         }
     }
 
+    public static class IgnoreCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "ignore";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) throws Exception {
+            ignore(options, line);
+        }
+    }
+
+    /**
+     * ISO-8601 in UTC. A log being read by another program should not shift when the machine
+     * writing it is in a different zone, or when it crosses a daylight saving boundary mid-sync.
+     */
+    private static final String TIMESTAMP = "%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z'}{UTC}";
+
+    /**
+     * The log4j2 conversion pattern for a -logformat value, or null to leave the configured
+     * default (the message alone) in place.
+     *
+     * kv quotes the message and escapes what is inside it, because a sync message can carry a file
+     * name with a quote in it and an unescaped one would end the field early.
+     */
+    private static String logPattern(String logFormat, boolean debug) {
+        if (StringUtils.isBlank(logFormat)) {
+            // -debug on its own still wants the level and source class, as it always has.
+            return debug ? "%-5p %c - %m%n" : null;
+        }
+        String f = logFormat.trim().toLowerCase(Locale.ROOT);
+        // The source class earns its place once someone is diagnosing, whichever shape they chose.
+        String source = debug ? " %c" : "";
+        switch (f) {
+            case "plain":
+                return debug ? "%-5p" + source + " - %m%n" : "%m%n";
+            case "ts":
+                return TIMESTAMP + " %-5p" + source + " %m%n";
+            case "kv":
+                return "ts=" + TIMESTAMP + " level=%p"
+                        + (debug ? " source=%c" : "")
+                        + " msg=\"%enc{%m}{JSON}\"%n";
+            default:
+                throw new IllegalArgumentException("Unknown log format '" + logFormat
+                        + "'. Use one of: plain, ts, kv");
+        }
+    }
+
     /**
      * Normal runs print the message alone; the level and class name only help when something is
      * being diagnosed, and they bury the lines a user actually wants. -debug brings both back and
-     * turns the level up.
+     * turns the level up, and -logformat asks for a shape a program can read.
      */
-    private static void configureLogging(boolean debug) {
-        if (!debug) {
-            return;
+    private static void configureLogging(boolean debug, String logFormat) {
+        String pattern = logPattern(logFormat, debug);
+        if (pattern != null) {
+            // log4j2 resolves ${sys:ksync.logPattern} when it builds the layout, which has already
+            // happened by now because our static loggers initialised it. Setting the property and
+            // reconfiguring is what makes the new pattern take effect.
+            System.setProperty("ksync.logPattern", pattern);
+            org.apache.logging.log4j.core.config.Configurator.reconfigure();
         }
-        // log4j2 resolves ${sys:ksync.logPattern} when it builds the layout, which has already
-        // happened by now because our static loggers initialised it. Setting the property and
-        // reconfiguring is what makes the new pattern take effect.
-        System.setProperty("ksync.logPattern", "%-5p %c - %m%n");
-        org.apache.logging.log4j.core.config.Configurator.reconfigure();
-        // Only our own code, not every library: turning httpclient up to debug buries everything
-        // in wire logging nobody asked for.
-        org.apache.logging.log4j.core.config.Configurator.setLevel("co.kademi", org.apache.logging.log4j.Level.DEBUG);
-        org.apache.logging.log4j.core.config.Configurator.setLevel("io.milton.sync", org.apache.logging.log4j.Level.DEBUG);
-        log.debug("Debug logging enabled");
+        if (debug) {
+            // Only our own code, not every library: turning httpclient up to debug buries everything
+            // in wire logging nobody asked for.
+            org.apache.logging.log4j.core.config.Configurator.setLevel("co.kademi", org.apache.logging.log4j.Level.DEBUG);
+            org.apache.logging.log4j.core.config.Configurator.setLevel("io.milton.sync", org.apache.logging.log4j.Level.DEBUG);
+            log.debug("Debug logging enabled");
+        }
     }
 
     public static void showUsage(Options options) {
@@ -383,6 +446,47 @@ public class KSync3 {
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
             kSync3.login(null);
         }, options, line);
+    }
+
+    /**
+     * Adds patterns to the global ignore file, or shows what is in it.
+     *
+     * Unlike the other commands this one is not about any one checkout, so it does not need a
+     * directory, a url or a login.
+     */
+    private static void ignore(Options options, CommandLine line) throws Exception {
+        GlobalIgnores ignores = GlobalIgnores.defaultIgnores();
+        List<String> toAdd = KSync3Utils.split(line.getOptionValue("pattern"));
+
+        if (toAdd == null) {
+            showIgnores(ignores);
+            return;
+        }
+
+        for (String pattern : toAdd) {
+            if (StringUtils.isBlank(pattern)) {
+                continue;
+            }
+            if (ignores.add(pattern)) {
+                log.info("Ignoring {}", pattern);
+            } else {
+                log.info("Already ignoring {}", pattern);
+            }
+        }
+        log.info("Global ignore file is {}", ignores.getPath());
+    }
+
+    private static void showIgnores(GlobalIgnores ignores) {
+        List<String> patterns = ignores.patterns();
+        if (patterns.isEmpty()) {
+            log.info("No global ignore patterns yet. Add one with: ksync3 -command ignore -pattern \"*.log\"");
+            log.info("They would be kept in {}", ignores.getPath());
+            return;
+        }
+        log.info("Global ignore patterns, from {}:", ignores.getPath());
+        for (String pattern : patterns) {
+            log.info("  {}", pattern);
+        }
     }
 
     private static void checkout(Options options, CommandLine line) throws Exception {

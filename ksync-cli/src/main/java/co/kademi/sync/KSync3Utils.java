@@ -159,14 +159,6 @@ public class KSync3Utils {
     }
 
     static boolean ignored(String name, List<String> ignores) {
-        if (ignores == null) {
-            return false;
-        }
-        for (String s : ignores) {
-            if (name.equals(s)) {
-                return true;
-            }
-        }
-        return false;
+        return io.milton.sync.Utils.matchesAny(name, ignores);
     }
 }

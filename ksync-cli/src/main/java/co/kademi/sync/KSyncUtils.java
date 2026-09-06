@@ -60,7 +60,7 @@ public class KSyncUtils {
                 log.debug("We have a saved login, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
             }
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
-            List<String> ignores = KSync3Utils.split(sIgnores);
+            List<String> ignores = GlobalIgnores.combine(KSync3Utils.split(sIgnores));
             KSyncUtils.writeProps(url, user, configDir);
 
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth);

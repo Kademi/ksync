@@ -153,7 +153,28 @@ public class MemoryLocalTripletStore {
      */
     private boolean progressPending;
 
+    /**
+     * The dots are reassurance for someone watching a terminal, and they are written straight to
+     * stdout so no logging config can turn them off. When output is redirected to a file or a pipe
+     * nobody is watching, and because a run of dots carries no newline the next log line arrives
+     * glued to the end of it - "........Push complete" - which defeats anything reading the log a
+     * line at a time. System.console() is null exactly when stdout is not a terminal, so this
+     * leaves interactive runs untouched and gives redirected ones clean lines.
+     */
+    private boolean showProgress = System.console() != null;
+
+    /**
+     * Overrides the terminal detection. A test jvm has no console, so a test that is about what
+     * the progress marks look like has to turn them on for itself.
+     */
+    void setShowProgress(boolean showProgress) {
+        this.showProgress = showProgress;
+    }
+
     private void progress(String mark) {
+        if (!showProgress) {
+            return;
+        }
         System.out.print(mark);
         progressPending = true;
     }

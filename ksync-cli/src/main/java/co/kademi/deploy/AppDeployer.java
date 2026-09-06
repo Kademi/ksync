@@ -173,7 +173,7 @@ public class AppDeployer {
             String appIds = KSync3Utils.getInput(options, line, "appids", null);
 
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
-            List<String> ignores = KSync3Utils.split(sIgnores);
+            List<String> ignores = co.kademi.sync.GlobalIgnores.combine(KSync3Utils.split(sIgnores));
 
             AppDeployer d;
             try {

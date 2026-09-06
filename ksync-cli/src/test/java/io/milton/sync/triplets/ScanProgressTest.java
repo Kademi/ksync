@@ -42,7 +42,18 @@ public class ScanProgressTest {
         System.setOut(realOut);
     }
 
+    /**
+     * The progress marks only print to a terminal, and a test jvm has no console, so these tests
+     * turn them on by hand. What they are checking is the line discipline around the marks, which
+     * still has to hold whenever the marks are being printed at all.
+     */
     private MemoryLocalTripletStore storeOver(Path dir) throws Exception {
+        MemoryLocalTripletStore s = rawStoreOver(dir);
+        s.setShowProgress(true);
+        return s;
+    }
+
+    private MemoryLocalTripletStore rawStoreOver(Path dir) throws Exception {
         Path work = Files.createTempDirectory("scanwork");
         return new MemoryLocalTripletStore(dir.toFile(), new EventManagerImpl(),
                 new FileSystem2BlobStore(new File(work.toFile(), "blobs")),
@@ -86,6 +97,21 @@ public class ScanProgressTest {
         String lastLine = out.substring(out.lastIndexOf('\n') + 1);
         assertEquals("No change on server since last pull", lastLine);
         assertFalse("the message must not be stuck to the dots", lastLine.contains("."));
+    }
+
+    /**
+     * Redirected to a file or a pipe there is nobody watching, and a run of dots with no newline
+     * leaves the next log line glued to the end of it, which defeats reading the log a line at a
+     * time. Off by default is what makes "Push complete" land at the start of its own line.
+     */
+    @Test
+    public void printsNoProgressWhenOutputIsNotATerminal() throws Exception {
+        rawStoreOver(root).scan();
+        System.out.print("Push complete");
+
+        String out = captured.toString("UTF-8");
+        assertFalse("no progress marks belong in a redirected log, got: " + out, out.contains("."));
+        assertEquals("Push complete", out);
     }
 
     /** Scanning twice must not leave a trailing blank line each time. */
