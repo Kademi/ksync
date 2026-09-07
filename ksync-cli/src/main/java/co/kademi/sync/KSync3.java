@@ -1,6 +1,9 @@
 package co.kademi.sync;
 
 import co.kademi.deploy.AppDeployer;
+import co.kademi.sync.status.SyncState;
+import co.kademi.sync.status.SyncStatusReporter;
+import co.kademi.sync.status.TrayStatusIcon;
 import io.milton.common.Path;
 import io.milton.event.EventManager;
 import io.milton.event.EventManagerImpl;
@@ -35,6 +38,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.FileSystems;
+import java.nio.file.Paths;
 import java.nio.file.WatchService;
 import java.util.Properties;
 import java.util.ArrayList;
@@ -112,6 +116,19 @@ public class KSync3 {
      */
     private static boolean localWins;
 
+    /**
+     * Where to write the status JSON, from -statusfile. Null means the default inside .ksync.
+     *
+     * Fully qualified because io.milton.common.Path is the Path in this file.
+     */
+    private static java.nio.file.Path statusFile;
+
+    /** Whether the status bar icon was turned off with -notray. */
+    private static boolean trayDisabled;
+
+    /** The command being run, which decides whether status is worth publishing at all. */
+    private static String commandName;
+
     private static final List<Command> commands = new ArrayList<>();
 
     static {
@@ -169,6 +186,8 @@ public class KSync3 {
         options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
         options.addOption("logout", false, "Discard the stored OAuth2 tokens (for the login command)");
         options.addOption("pattern", true, "File/folder name or glob to add to the global ignore file, eg *.log or node_modules. Comma seperated for several (for the ignore command). Lists the file when omitted");
+        options.addOption("statusfile", true, "Where to write the JSON status file that a status bar, editor or script can read. Defaults to .ksync/status.json inside the checkout");
+        options.addOption("notray", false, "Do not show the status icon in the OS status bar during the sync command. The status file is still written");
         CommandLineParser parser = new DefaultParser();
         CommandLine line;
         try {
@@ -182,6 +201,9 @@ public class KSync3 {
         }
 
         localWins = KSync3Utils.getBooleanInput(line, "localwins");
+        trayDisabled = KSync3Utils.getBooleanInput(line, "notray");
+        String sStatusFile = line.getOptionValue("statusfile");
+        statusFile = StringUtils.isBlank(sStatusFile) ? null : Paths.get(sStatusFile.trim());
 
         // Both of these reject an unknown value by name. That is a typo in the command line, not a
         // fault worth a stack trace, so report it the same way a parse failure is reported.
@@ -201,6 +223,12 @@ public class KSync3 {
             return;
         }
 
+        commandName = cmd.getName();
+        if (wantsTray()) {
+            // Before anything touches AWT, which the tray itself is about to do
+            TrayStatusIcon.configureMacOsAccessoryMode(guiDialogsPossible());
+        }
+
         try {
             cmd.execute(options, line);
         } catch (Exception ex) {
@@ -218,6 +246,7 @@ public class KSync3 {
     }
 
     private void showErrors() {
+        status.errorCount(errors.size());
         if (!errors.isEmpty()) {
             System.out.println("----- ERRORS -------");
             for (String s : errors) {
@@ -367,6 +396,53 @@ public class KSync3 {
         public void execute(Options options, CommandLine line) throws Exception {
             ignore(options, line);
         }
+    }
+
+    /**
+     * Whether a failure means the server could not be reached, as against a server that answered
+     * with a refusal. Worth telling apart in a status bar: the first often clears on its own when
+     * the network comes back, the second needs someone to log in or fix a permission.
+     */
+    private static SyncState stateFor(Throwable ex) {
+        Throwable t = ex;
+        // bounded, because a cause chain can be made to point back at itself
+        for (int i = 0; t != null && i < 20; i++) {
+            if (t instanceof java.net.UnknownHostException
+                    || t instanceof java.net.ConnectException
+                    || t instanceof java.net.NoRouteToHostException
+                    || t instanceof java.net.SocketTimeoutException) {
+                return SyncState.OFFLINE;
+            }
+            t = t.getCause();
+        }
+        return SyncState.FAILED;
+    }
+
+    /**
+     * Which commands publish status: the ones that talk to the server and take long enough for
+     * the answer to matter. Login, usage, ignore and publish have nothing a status bar would show.
+     */
+    private static boolean publishesStatus() {
+        return "sync".equals(commandName) || "push".equals(commandName)
+                || "pull".equals(commandName) || "checkout".equals(commandName);
+    }
+
+    /**
+     * Only sync earns a status bar icon. The others are over in a second or two, and an icon that
+     * appears and vanishes before it can be read is worse than none - it would also make every
+     * short command pay for starting AWT.
+     */
+    private static boolean wantsTray() {
+        return "sync".equals(commandName) && !trayDisabled;
+    }
+
+    /**
+     * Whether a conflict might still be put on screen as a dialog. Errs towards yes: AUTO decides
+     * later from the environment, and being wrong in this direction costs a Dock icon on macOS,
+     * while being wrong in the other direction hides a dialog the sync is waiting on.
+     */
+    private static boolean guiDialogsPossible() {
+        return !localWins && conflictMode != ConflictResolvers.Mode.CONSOLE;
     }
 
     /**
@@ -583,6 +659,12 @@ public class KSync3 {
     private final List<String> errors = new ArrayList<>();
     private final String remoteAddress;
 
+    /**
+     * Publishes what this sync is doing to the status file and, for the sync command, the OS
+     * status bar. Never null - the commands with nothing to say get a reporter that goes nowhere.
+     */
+    private final SyncStatusReporter status;
+
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
         this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, null);
     }
@@ -592,6 +674,9 @@ public class KSync3 {
         this.configDir = configDir;
         this.ignores = ignores;
         this.remoteAddress = sRemoteAddress;
+        this.status = publishesStatus()
+                ? SyncStatusReporter.create(commandName, localDir, configDir, sRemoteAddress, statusFile, wantsTray())
+                : SyncStatusReporter.none();
         eventManager = new EventManagerImpl();
 
         int timeout = 180000;
@@ -672,6 +757,7 @@ public class KSync3 {
 
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
+                    status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
                 }
             }
         }, null, fileSystemWatchingService, ignores, fileHashCache);
@@ -683,10 +769,12 @@ public class KSync3 {
 
     private void start() throws MalformedURLException, IOException {
         log.info("Do initial scan");
+        status.state(SyncState.SCANNING, "initial scan");
         tripletStore.scan();
         log.info("Done initial scan, now begin monitoring..");
         tripletStore.start();
         log.debug("Done monitor init");
+        status.ready("watching for local changes");
     }
 
     private void login(String secondFactor) {
@@ -832,13 +920,17 @@ public class KSync3 {
     }
 
     private void push(String localRootHash, File configDir) throws IOException, InterruptedException {
+        status.state(SyncState.PUSHING, "checking the remote");
         String remoteHash = getRemoteHash(branchPath);
         if (remoteHash == null) {
             log.info("Aborted");
+            status.problem(SyncState.OFFLINE, "The server did not return a hash for " + branchPath);
             return;
         }
+        status.hashes(localRootHash, remoteHash);
         if (remoteHash.equals(localRootHash)) {
             log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
+            status.state(SyncState.IDLE, "nothing to push");
             return;
         }
 
@@ -846,15 +938,22 @@ public class KSync3 {
         if (!remoteHash.equals(lastRemoteHash)) {
             if (!localWins) {
                 log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
+                status.problem(SyncState.BLOCKED, "The remote has changed. Pull, or use -localwins to overwrite it");
                 return;
             }
             // Still worth a line: this is the point at which remote-only changes are lost, so
             // the hash that was on the server needs to be in the log to go back to.
             log.info("Remote repository has changed, overwriting it from local because -localwins was given. Current remote={} last remote={}", remoteHash, lastRemoteHash);
+            // Notified, not just logged. Discarding someone else's push is exactly the kind of
+            // thing that should not happen silently behind an assistant driving the sync.
+            status.alert("ksync: overwriting the remote",
+                    "The remote had changed and -localwins replaced it from local. Previous remote hash " + remoteHash, false);
+            status.state(SyncState.PUSHING, "overwriting a changed remote");
         }
 
         // walk the VFS and push hashes and blobs to the remote store. Anything
         // already in the remote store will be ignored
+        status.state(SyncState.PUSHING, "uploading changed files");
         walkLocalVfs(localRootHash, httpBlobStore, httpHashStore, Path.root);
 
         // wait for threads to complete
@@ -878,10 +977,14 @@ public class KSync3 {
                 if (st) {
                     KSyncUtils.saveRemoteHash(configDir, localRootHash);
                     log.info("Completed ok");
+                    status.hashes(localRootHash, localRootHash);
+                    status.errorCount(errors.size());
+                    status.state(SyncState.IDLE, "pushed");
                     return;
                 }
             }
             log.warn("Push failed: Check for missing objects", res);
+            status.state(SyncState.PUSHING, "uploading objects the server was missing");
             // todo: check status
             Object dataOb = jsonRes.get("data");
             log.debug("Push failure payload: {}", dataOb);
@@ -929,6 +1032,7 @@ public class KSync3 {
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             log.error("Exception setting hash", ex);
+            status.problem(SyncState.FAILED, "Could not set the repository hash: " + ex.getMessage());
         }
     }
 
@@ -1051,6 +1155,7 @@ public class KSync3 {
 
     private void checkout(File configDir) {
         log.info("checkout {}", branchPath);
+        status.state(SyncState.PULLING, "checkout");
         String hash = getRemoteHash(branchPath);
 
         // Checkout starts from nothing, so ask the server for the whole object graph in one request. Anything the
@@ -1069,6 +1174,9 @@ public class KSync3 {
         pull(hash, this.localDir, ignores); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
         log.info("finished checkout");
+        status.hashes(hash, hash);
+        status.errorCount(errors.size());
+        status.state(SyncState.IDLE, "checked out");
     }
 
     /**
@@ -1079,13 +1187,17 @@ public class KSync3 {
      * @throws IOException
      */
     public String pull(File configDir) throws IOException {
+        status.state(SyncState.PULLING, "checking the remote");
         String localHash = commit();
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         String remoteHash = getRemoteHash(branchPath);
+        status.hashes(localHash, remoteHash);
         if (lastRemoteHash != null && lastRemoteHash.equals(remoteHash)) {
             log.info("No change on server since last pull");
+            status.state(SyncState.IDLE, "nothing to pull");
             return null;
         }
+        status.state(SyncState.PULLING, "fetching changes");
         try {
             fetch(Path.root, remoteHash, null); // fetch into local blobstore
         } catch (InterruptedException ex) {
@@ -1100,6 +1212,9 @@ public class KSync3 {
         log.info("Finished pull, save hash " + remoteHash);
         KSyncUtils.saveRemoteHash(configDir, remoteHash);
         String newLocalHash = commit();
+        status.hashes(newLocalHash, remoteHash);
+        status.errorCount(errors.size());
+        status.state(SyncState.IDLE, "pulled");
         return newLocalHash;
     }
 
@@ -1112,7 +1227,15 @@ public class KSync3 {
             String s = new String(resp);
             return s;
         } catch (HttpException | NotAuthorizedException | BadRequestException | ConflictException | NotFoundException ex) {
+            status.problem(stateFor(ex), "Could not read the remote hash: " + ex.getMessage());
             throw new RuntimeException(ex);
+        } catch (RuntimeException ex) {
+            // The one that actually happens. A refused connection is wrapped in a
+            // RuntimeException inside client.get and comes out here, not as one of the checked
+            // exceptions above, so catching only those left the status saying "checking the
+            // remote" after the command had already given up.
+            status.problem(stateFor(ex), "Could not read the remote hash: " + ex.getMessage());
+            throw ex;
         }
     }
 
@@ -1271,8 +1394,16 @@ public class KSync3 {
             push(hash, configDir);
         } catch (IOException ex) {
             log.error("Ex", ex);
+            status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
         } catch (InterruptedException ex) {
             log.warn("Interrupted", ex);
+            status.state(SyncState.STOPPED, "interrupted");
+        } catch (RuntimeException ex) {
+            // A net under everything else that can fail hard mid push. Without it the status is
+            // left mid operation and the shutdown hook turns that into a bare "stopped", which
+            // reads as though the push simply finished.
+            status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
+            throw ex;
         }
     }
 
