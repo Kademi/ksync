@@ -15,6 +15,9 @@ import org.slf4j.LoggerFactory;
  * not the same question as whether a display exists: an agent driving ksync on a developer's
  * desktop has a perfectly good display and still cannot press a button. So the automatic choice
  * looks at who is running, not just at whether X is up.
+ *
+ * All of that is about how to put the question. -localwins says there is no question: local is the
+ * authority, so the local file is kept and the run carries on.
  */
 public class ConflictResolvers {
 
@@ -37,6 +40,18 @@ public class ConflictResolvers {
             throw new IllegalArgumentException("Unknown conflict mode '" + s
                     + "'. Use one of: auto, gui, console");
         }
+    }
+
+    /**
+     * @param mode how to ask, from -conflictmode
+     * @param localWins when local is authoritative (-localwins), in which case there is nothing to
+     * ask about: the local file always wins, so no resolver puts a question to anyone
+     */
+    public static ConflictResolver create(Mode mode, boolean localWins) {
+        if (localWins) {
+            return new LocalWinsConflictResolver();
+        }
+        return create(mode);
     }
 
     public static ConflictResolver create(Mode mode) {

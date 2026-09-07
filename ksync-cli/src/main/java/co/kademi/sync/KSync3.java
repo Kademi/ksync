@@ -102,6 +102,16 @@ public class KSync3 {
     /** How conflicts are asked about, from -conflictmode. */
     private static ConflictResolvers.Mode conflictMode = ConflictResolvers.Mode.AUTO;
 
+    /**
+     * Whether local is the authority, from -localwins.
+     *
+     * Off by default, which is the careful reading: the remote may hold someone else's work, so a
+     * remote that has moved on stops a push and a conflict gets a question. Where the local
+     * checkout is version managed that reading is wrong - the remote differing is the normal state
+     * of things, and both interruptions are just noise in the way.
+     */
+    private static boolean localWins;
+
     private static final List<Command> commands = new ArrayList<>();
 
     static {
@@ -153,6 +163,7 @@ public class KSync3 {
         options.addOption("appname", true, "app name for creating folder in app directory");
         options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
         options.addOption("conflictmode", true, "How to ask about file conflicts: gui (a dialog, the default), console (a terminal prompt, for CI or an agent), or auto");
+        options.addOption("localwins", false, "Treat local as authoritative: overwrite the remote even when it has changed, and keep the local file on a conflict, without prompting. For a checkout that is version managed. Makes -conflictmode irrelevant, because nothing is asked");
         options.addOption("debug", false, "Verbose output: show debug logging, with the level and source class on each line");
         options.addOption("logformat", true, "Shape of each log line: plain (the message alone, the default), ts (an ISO-8601 UTC timestamp and level first) or kv (ts=.. level=.. msg=\"..\", for a log reader)");
         options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
@@ -169,6 +180,8 @@ public class KSync3 {
             System.exit(1);
             return;
         }
+
+        localWins = KSync3Utils.getBooleanInput(line, "localwins");
 
         // Both of these reject an unknown value by name. That is a typo in the command line, not a
         // fault worth a stack trace, so report it the same way a parse failure is reported.
@@ -831,8 +844,13 @@ public class KSync3 {
 
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         if (!remoteHash.equals(lastRemoteHash)) {
-            log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
-            return;
+            if (!localWins) {
+                log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
+                return;
+            }
+            // Still worth a line: this is the point at which remote-only changes are lost, so
+            // the hash that was on the server needs to be in the log to go back to.
+            log.info("Remote repository has changed, overwriting it from local because -localwins was given. Current remote={} last remote={}", remoteHash, lastRemoteHash);
         }
 
         // walk the VFS and push hashes and blobs to the remote store. Anything
@@ -1076,7 +1094,7 @@ public class KSync3 {
         }
 
         DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore,
-                ConflictResolvers.create(conflictMode)));
+                ConflictResolvers.create(conflictMode, localWins)));
         dg.generateDeltas(lastRemoteHash, remoteHash, localHash); // calc changes and apply them to the working directory
 
         log.info("Finished pull, save hash " + remoteHash);

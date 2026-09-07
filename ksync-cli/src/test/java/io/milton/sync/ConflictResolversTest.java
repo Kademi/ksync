@@ -94,6 +94,27 @@ public class ConflictResolversTest {
         }
     }
 
+    /**
+     * -localwins settles every conflict on its own, so no mode gets to put a dialog or a prompt
+     * in the way - including the mode that explicitly asked for one.
+     */
+    @Test
+    public void localWinsNeverAsks() {
+        for (Mode mode : Mode.values()) {
+            assertTrue(mode.name(), ConflictResolvers.create(mode, true) instanceof LocalWinsConflictResolver);
+        }
+        ConflictResolver r = ConflictResolvers.create(Mode.GUI, true);
+        assertEquals(ConflictResolver.ConflictChoice.LOCAL, r.showConflictResolver("some file", null));
+        // nothing to remember, so each conflict is still logged rather than silently skipped
+        assertNull(r.getRememberSecs());
+    }
+
+    /** Without it, the mode still decides as it always has. */
+    @Test
+    public void localWinsOffLeavesTheModeAlone() {
+        assertTrue(ConflictResolvers.create(Mode.CONSOLE, false) instanceof ConsoleConflictResolver);
+    }
+
     /** Explicitly asking for a dialog on a headless box must degrade, not throw. */
     @Test
     public void guiModeFallsBackWhenHeadless() {
