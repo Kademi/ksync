@@ -66,36 +66,95 @@ public class GlobalIgnoresTest {
     @Test
     public void addKeepsCommentsAndExistingPatterns() throws Exception {
         write("# mine\n*.log\n");
-        assertTrue(ignores.add("node_modules"));
+        assertTrue(ignores.add("target"));
         String content = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
         assertTrue(content.contains("# mine"));
-        assertEquals(Arrays.asList("*.log", "node_modules"), ignores.patterns());
+        assertEquals(Arrays.asList("*.log", "target"), ignores.patterns());
     }
 
     /** A file with no final newline must not have the new pattern glued onto the last one */
     @Test
     public void addToFileWithNoTrailingNewline() throws Exception {
         write("*.log");
-        assertTrue(ignores.add("node_modules"));
-        assertEquals(Arrays.asList("*.log", "node_modules"), ignores.patterns());
+        assertTrue(ignores.add("target"));
+        assertEquals(Arrays.asList("*.log", "target"), ignores.patterns());
     }
 
     @Test
     public void combineMergesGlobalAndLocal_withoutDuplicates() throws Exception {
         write("*.log\nnode_modules\n");
         List<String> combined = GlobalIgnores.combine(ignores, Arrays.asList("target", "*.log"));
-        assertEquals(Arrays.asList("*.log", "node_modules", "target"), combined);
+        // node_modules is built in, so naming it in the file changes nothing about the order
+        assertEquals(withBuiltIns("*.log", "target"), combined);
     }
 
-    /** Downstream ignore checks read null as "nothing to ignore", so preserve that */
+    /**
+     * The whole point of the built ins: a developer who has configured nothing, on a machine with
+     * no ignore file, still does not sync node_modules.
+     */
     @Test
-    public void combineWithNothingAnywhereIsNull() {
-        assertNull(GlobalIgnores.combine(ignores, null));
+    public void theBuiltInsApplyWithNothingConfiguredAnywhere() {
+        List<String> combined = GlobalIgnores.combine(ignores, null);
+        assertEquals(GlobalIgnores.BUILT_IN, combined);
+        assertTrue(Utils.matchesAny("node_modules", combined));
     }
 
     @Test
     public void combineWithNoGlobalFileKeepsLocal() {
-        assertEquals(Arrays.asList("target"), GlobalIgnores.combine(ignores, Arrays.asList("target")));
+        assertEquals(withBuiltIns("target"), GlobalIgnores.combine(ignores, Arrays.asList("target")));
+    }
+
+    /** Built ins come first, so a list read back is ordered by how hard it is to change. */
+    @Test
+    public void theBuiltInsComeFirst() throws Exception {
+        write("aaa-sorts-before-everything\n");
+        List<String> combined = GlobalIgnores.combine(ignores, Arrays.asList("zzz"));
+        assertEquals(GlobalIgnores.BUILT_IN, combined.subList(0, GlobalIgnores.BUILT_IN.size()));
+    }
+
+    /**
+     * Adding one to the file would write a line that does nothing, and then read back as though
+     * the file were what was protecting you.
+     */
+    @Test
+    public void addingABuiltInIsANoOp() throws Exception {
+        assertFalse(ignores.add("node_modules"));
+        assertFalse("a trailing slash is the same pattern", ignores.add("node_modules/"));
+        assertFalse("nothing should have been written", ignores.exists());
+        assertTrue(GlobalIgnores.isBuiltIn("node_modules"));
+        assertTrue(GlobalIgnores.isBuiltIn(" node_modules/ "));
+        assertFalse(GlobalIgnores.isBuiltIn("target"));
+        assertFalse(GlobalIgnores.isBuiltIn(null));
+    }
+
+    /**
+     * Kept deliberately short, because a built in cannot be turned off. dist, build and target
+     * are build output in most projects but a real part of an app in some, and silently refusing
+     * to deploy one would be much harder to work out than a large first sync.
+     */
+    @Test
+    public void theBuiltInsAreLimitedToWhatIsNeverDeployable() {
+        assertTrue(GlobalIgnores.BUILT_IN.contains("node_modules"));
+        for (String risky : Arrays.asList("dist", "build", "target", "out", "vendor", "assets")) {
+            assertFalse(risky + " must not be built in, it can be part of an app",
+                    GlobalIgnores.BUILT_IN.contains(risky));
+        }
+    }
+
+    /** The built ins reach the scan, which is the check that actually skips a directory. */
+    @Test
+    public void theScanSkipsTheBuiltIns() {
+        List<String> combined = GlobalIgnores.combine(ignores, null);
+        assertTrue(Utils.ignored(new java.io.File("/some/app/node_modules"), combined));
+        assertTrue(Utils.ignored(new java.io.File("/some/app/bower_components"), combined));
+        assertTrue(Utils.ignored(new java.io.File("/some/app/Thumbs.db"), combined));
+        assertFalse(Utils.ignored(new java.io.File("/some/app/theme.css"), combined));
+    }
+
+    private static List<String> withBuiltIns(String... rest) {
+        List<String> all = new java.util.ArrayList<>(GlobalIgnores.BUILT_IN);
+        all.addAll(Arrays.asList(rest));
+        return all;
     }
 
     @Test

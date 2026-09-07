@@ -104,15 +104,26 @@ public class FileSystemWatchingService {
     }
 
     public List<WatchKey> watch(File dir, WatchNotificationListener listener) throws IOException {
+        return watch(dir, listener, null);
+    }
+
+    /**
+     * @param ignorePatterns directories matching these get no watch and are not descended into.
+     * Without them an ignored directory still costs a watch per directory inside it: node_modules
+     * alone can hold tens of thousands, which on linux exhausts the per user inotify limit and
+     * then the files that do matter silently stop being watched. May be null.
+     */
+    public List<WatchKey> watch(File dir, WatchNotificationListener listener, List<String> ignorePatterns) throws IOException {
         mapOfListeners.put(listener, dir);
         List<WatchKey> watchKeys = new ArrayList<>();
-        initWatch(dir, watchKeys);
+        initWatch(dir, watchKeys, ignorePatterns);
         return watchKeys;
     }
 
-    private void initWatch(File dir, List<WatchKey> watchKeys) throws IOException {
+    private void initWatch(File dir, List<WatchKey> watchKeys, List<String> ignorePatterns) throws IOException {
         if (dir.isDirectory()) {
-            if (Utils.ignored(dir)) {
+            if (Utils.ignored(dir, ignorePatterns)) {
+                log.debug("Not watching ignored directory {}", dir);
                 return;
             }
             WatchKey key = registerWatchDir(dir);
@@ -122,7 +133,7 @@ public class FileSystemWatchingService {
             File[] list = dir.listFiles();
             if (list != null) {
                 for (File f : list) {
-                    initWatch(f, watchKeys);
+                    initWatch(f, watchKeys, ignorePatterns);
                 }
             }
         }

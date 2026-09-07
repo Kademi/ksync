@@ -558,6 +558,8 @@ public class KSync3 {
             }
             if (ignores.add(pattern)) {
                 log.info("Ignoring {}", pattern);
+            } else if (GlobalIgnores.isBuiltIn(pattern)) {
+                log.info("Already ignoring {}, it is built in and always applies", pattern);
             } else {
                 log.info("Already ignoring {}", pattern);
             }
@@ -566,6 +568,14 @@ public class KSync3 {
     }
 
     private static void showIgnores(GlobalIgnores ignores) {
+        // Shown first, and shown even when the file is empty. A pattern nobody can see is a
+        // pattern nobody can diagnose: the question these answer is "why did that not sync".
+        log.info("Always ignored, built in to ksync:");
+        for (String pattern : GlobalIgnores.BUILT_IN) {
+            log.info("  {}", pattern);
+        }
+        log.info("Names starting with a dot are skipped too, as is .ksync itself");
+
         List<String> patterns = ignores.patterns();
         if (patterns.isEmpty()) {
             log.info("No global ignore patterns yet. Add one with: ksync3 -command ignore -pattern \"*.log\"");

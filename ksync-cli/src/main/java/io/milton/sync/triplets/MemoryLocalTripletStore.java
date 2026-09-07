@@ -196,7 +196,7 @@ public class MemoryLocalTripletStore {
         if (fileSystemWatchingService != null) {
             watchKeys = this.fileSystemWatchingService.watch(root, (WatchEvent.Kind<?> event, File changed) -> {
                 processEvent(changed, event);
-            });
+            }, ignorePatterns);
             this.status = "start..";
             this.fileSystemWatchingService.start();
             this.status = "";

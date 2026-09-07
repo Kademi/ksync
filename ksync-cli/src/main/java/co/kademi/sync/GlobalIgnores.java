@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -20,9 +21,10 @@ import org.slf4j.LoggerFactory;
  * home directory.
  *
  * The per-checkout -ignore option only helps someone who remembers to pass it in every project.
- * The things people actually want gone - .DS_Store, node_modules, editor scratch files - are a
- * property of the machine, not of any one repository, so they belong in one file the user edits
- * once.
+ * The things people actually want gone are a property of the machine, not of any one repository,
+ * so they belong in one file the user edits once.
+ *
+ * The worst offenders do not even belong there: see {@link #BUILT_IN}.
  *
  * The format is gitignore's, minus the parts that need a path: one pattern per line, blank lines
  * and lines starting with # skipped. Patterns match a file or folder name anywhere in the tree,
@@ -37,6 +39,28 @@ public class GlobalIgnores {
      * and usable to relocate the file.
      */
     public static final String PATH_PROPERTY = "ksync.ignoreFile";
+
+    /**
+     * Patterns that are always ignored, whatever the ignore file says.
+     *
+     * node_modules is why this exists. Leaving it to configuration means every developer has to
+     * know to add it before their first sync, and the way they find out is by syncing a hundred
+     * thousand files they did not mean to and then working out why. A default that only protects
+     * the people who already knew about it is not much of a default.
+     *
+     * Deliberately short. Anything in here cannot be turned off, so it is limited to names that
+     * are generated rather than written, and would never be deployed. Notably absent are dist,
+     * build and target: those are build output for most projects but a legitimate part of an app
+     * for some, and silently refusing to deploy one would be far harder to diagnose than a large
+     * first sync. They belong in the ignore file, per machine, where they can be undone.
+     *
+     * Dot names need no entry here - anything starting with a dot is already skipped, along with
+     * .ksync itself, by {@link io.milton.sync.Utils#ignored(java.io.File, List)}.
+     */
+    public static final List<String> BUILT_IN = Collections.unmodifiableList(Arrays.asList(
+            "node_modules",
+            "bower_components",
+            "Thumbs.db"));
 
     private final Path path;
 
@@ -92,6 +116,15 @@ public class GlobalIgnores {
     }
 
     /**
+     * Whether a pattern is one of the built in ones, and so already in force. Cleaned the same
+     * way the file is read, so "node_modules/" is recognised as "node_modules".
+     */
+    public static boolean isBuiltIn(String pattern) {
+        String s = clean(pattern);
+        return s != null && BUILT_IN.contains(s);
+    }
+
+    /**
      * Adds a pattern, creating the file if this is the first one.
      *
      * @return true if it was added, false if the file already had it
@@ -101,7 +134,7 @@ public class GlobalIgnores {
         if (s == null) {
             throw new IllegalArgumentException("Not a usable ignore pattern: " + pattern);
         }
-        if (patterns().contains(s)) {
+        if (BUILT_IN.contains(s) || patterns().contains(s)) {
             return false;
         }
         Path parent = path.getParent();
@@ -150,7 +183,11 @@ public class GlobalIgnores {
     }
 
     /**
-     * The global patterns plus the ones given for this run, without duplicates.
+     * The built in patterns, the global ones and the ones given for this run, without duplicates.
+     *
+     * This is the one place an ignore list is built for a run - the sync commands go through
+     * KSyncUtils and publish goes through AppDeployer, and both call this - so the built ins
+     * being added here is what makes them unavoidable.
      *
      * @param localIgnores patterns from -ignore or ksync.properties, may be null
      */
@@ -159,13 +196,14 @@ public class GlobalIgnores {
     }
 
     static List<String> combine(GlobalIgnores global, List<String> localIgnores) {
-        Set<String> all = new LinkedHashSet<>(global.patterns());
+        // built ins first, so a list read back reads in order of how hard it is to change
+        Set<String> all = new LinkedHashSet<>(BUILT_IN);
+        all.addAll(global.patterns());
         if (localIgnores != null) {
             all.addAll(localIgnores);
         }
-        if (all.isEmpty()) {
-            return null; // the ignore checks downstream read null as "nothing to ignore"
-        }
+        // Never null now, where it used to be when nothing was configured anywhere. Callers pass
+        // the result straight to the ignore checks, which still read null as "ignore nothing".
         return new ArrayList<>(all);
     }
 }
