@@ -105,9 +105,20 @@ public class SyncStatusReporter {
         state(SyncState.IDLE, detail);
     }
 
-    /** Records a problem, which also carries the message into the status as the last error */
+    /**
+     * Records a problem, which also carries the message into the status as the last error.
+     *
+     * The first problem in an operation wins. One failure is reported from every catch it passes
+     * through on the way out, and the innermost has the most to say: "could not read the remote
+     * hash: connection refused" beats "push failed: RuntimeException: RuntimeException". Starting
+     * the next operation clears the state, so a later, different problem is still recorded.
+     */
     public synchronized void problem(SyncState state, String message) {
         if (closed) {
+            return;
+        }
+        if (current.getState().isProblem()) {
+            log.debug("Already reporting {}, not replacing it with {}: {}", current.getState(), state, message);
             return;
         }
         SyncState previous = current.getState();

@@ -33,7 +33,8 @@ public class StatusFile implements StatusSink {
     }
 
     public StatusFile(Path path) {
-        this.path = path;
+        // a bare file name has no parent, and the temp file below is created beside the target
+        this.path = path.toAbsolutePath();
     }
 
     public Path getPath() {

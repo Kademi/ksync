@@ -68,6 +68,28 @@ public class SyncStatusReporterTest {
         assertTrue(r.alerts.get(0), r.alerts.get(0).contains("pull"));
     }
 
+    /**
+     * One refused connection is caught and reported three times on its way out of a push. The
+     * innermost report is the useful one, and the count should say one failure, not three.
+     */
+    @Test
+    public void theFirstProblemInAnOperationWins() throws Exception {
+        Recorder r = new Recorder();
+        SyncStatusReporter reporter = reporter(r);
+
+        reporter.state(SyncState.PUSHING, "checking the remote");
+        reporter.problem(SyncState.OFFLINE, "Could not read the remote hash: connection refused");
+        reporter.problem(SyncState.FAILED, "Push failed: java.lang.RuntimeException");
+        assertEquals(SyncState.OFFLINE, reporter.current().getState());
+        assertEquals("Could not read the remote hash: connection refused", reporter.current().getDetail());
+        assertEquals(1, reporter.current().getErrorCount());
+
+        // the next operation starts clean, so a different problem later is still recorded
+        reporter.state(SyncState.PUSHING, "checking the remote");
+        reporter.problem(SyncState.BLOCKED, "the remote has changed");
+        assertEquals(SyncState.BLOCKED, reporter.current().getState());
+    }
+
     @Test
     public void recoveryIsAnnouncedToo() throws Exception {
         Recorder r = new Recorder();

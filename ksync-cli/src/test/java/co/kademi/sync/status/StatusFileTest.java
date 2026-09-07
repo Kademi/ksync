@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import net.sf.json.JSONObject;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -28,6 +29,14 @@ public class StatusFileTest {
         Path p = StatusFile.defaultPath(new File("/home/brad/site/.ksync"));
         assertEquals("status.json", p.getFileName().toString());
         assertEquals(".ksync", p.getParent().getFileName().toString());
+    }
+
+    /** -statusfile status.json, with no directory, used to fail on every write: no parent to put the temp file in */
+    @Test
+    public void aBareFileNameResolvesAgainstTheWorkingDirectory() {
+        StatusFile f = new StatusFile(Paths.get("status.json"));
+        assertTrue(f.getPath().isAbsolute());
+        assertEquals(Paths.get("").toAbsolutePath(), f.getPath().getParent());
     }
 
     @Test

@@ -226,7 +226,7 @@ public class KSync3 {
         commandName = cmd.getName();
         if (wantsTray()) {
             // Before anything touches AWT, which the tray itself is about to do
-            TrayStatusIcon.configureMacOsAccessoryMode(guiDialogsPossible());
+            TrayStatusIcon.configureMacOsAccessoryMode();
         }
 
         try {
@@ -434,15 +434,6 @@ public class KSync3 {
      */
     private static boolean wantsTray() {
         return "sync".equals(commandName) && !trayDisabled;
-    }
-
-    /**
-     * Whether a conflict might still be put on screen as a dialog. Errs towards yes: AUTO decides
-     * later from the environment, and being wrong in this direction costs a Dock icon on macOS,
-     * while being wrong in the other direction hides a dialog the sync is waiting on.
-     */
-    private static boolean guiDialogsPossible() {
-        return !localWins && conflictMode != ConflictResolvers.Mode.CONSOLE;
     }
 
     /**

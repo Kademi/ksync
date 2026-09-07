@@ -35,18 +35,12 @@ public class TrayStatusIcon implements StatusSink {
      * item. Must be called before anything touches AWT, because the property is read when the
      * application object is created.
      *
-     * @param dialogsPossible whether a conflict may still be put on screen as a dialog. An
-     * accessory application has no Dock icon to click, so a dialog from one can end up behind
-     * another window with no way to reach it - a sync that hangs on a question nobody can see.
-     * That is strictly worse than a stray Dock icon, so when a dialog is still possible this
-     * leaves the property alone and accepts the icon.
+     * Safe with the conflict dialog: an accessory has no Dock icon to bring a window forward
+     * with, but GuiConflictResolver opens its dialog always on top and asks for the foreground,
+     * so it does not need one.
      */
-    public static void configureMacOsAccessoryMode(boolean dialogsPossible) {
+    public static void configureMacOsAccessoryMode() {
         if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac")) {
-            return;
-        }
-        if (dialogsPossible) {
-            log.debug("Not asking for macOS accessory mode: a conflict dialog is still possible and would be unreachable without a Dock icon");
             return;
         }
         System.setProperty("apple.awt.UIElement", "true");
