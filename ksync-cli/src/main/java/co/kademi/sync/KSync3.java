@@ -238,6 +238,12 @@ public class KSync3 {
                 log.error(notLoggedIn.getMessage());
                 System.exit(1);
             }
+            SetupException setup = SetupException.find(ex);
+            if (setup != null) {
+                // likewise: the message says what to fix, the trace only buries it
+                log.error(setup.getMessage());
+                System.exit(1);
+            }
             log.error("Exception running command {} - {}", cmd.getName(), ex.getMessage(), ex);
             System.exit(1);
         }
@@ -521,7 +527,7 @@ public class KSync3 {
             }
 
             String user = KSync3Utils.getInput(options, line, "user", props, true);
-            String pwd = KSync3Utils.getPassword(line, url, user);
+            String pwd = KSync3Utils.getPassword(line, user, url);
 
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
             kSync3.login(null);

@@ -34,7 +34,7 @@ public class KSyncUtils {
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
 
-            String url = KSync3Utils.getInput(options, line, "url", props, needsUrl);
+            String url = requireUrl(KSync3Utils.getInput(options, line, "url", props, needsUrl), dir, options, line);
             migrateLegacyCredentials(url, configDir);
 
             String auth = line.getOptionValue("auth");
@@ -55,7 +55,7 @@ public class KSyncUtils {
             if (oauth != null) {
                 log.debug("Using the stored OAuth2 session, so dont prompt for password");
             } else if (cookies.isEmpty()) {
-                pwd = KSync3Utils.getPassword(line, url, user);
+                pwd = KSync3Utils.getPassword(line, user, url);
             } else {
                 log.debug("We have a saved login, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
             }
@@ -66,6 +66,36 @@ public class KSyncUtils {
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth);
             command.accept(kSync3);
         }, options, line);
+    }
+
+    /**
+     * The url of the remote branch this directory syncs with. Every command needs one: without it
+     * there is nothing to talk to, and the failure surfaced as a MalformedURLException from deep
+     * inside the KSync3 constructor, which says nothing about what to do next.
+     *
+     * A directory with no ksync.properties is not a checkout yet, so ask for the url when there is
+     * someone at a terminal to answer. A background sync has nobody to ask, so tell it plainly
+     * rather than blocking forever on a stdin that will never produce a line.
+     */
+    static String requireUrl(String url, File dir, Options options, CommandLine line) {
+        if (StringUtils.isBlank(url)) {
+            if (System.console() == null) {
+                throw new SetupException(dir.getAbsolutePath() + " is not a ksync checkout, and there is no terminal to ask for the url."
+                        + " Run it again with -url https://your-site/repo/branch, or check the branch out here first");
+            }
+            log.info("{} is not a ksync checkout yet, so there is no url to sync with", dir.getAbsolutePath());
+            url = KSync3Utils.getInput(options, line, "url", null, true);
+            if (StringUtils.isBlank(url)) {
+                throw new SetupException("No url given, so there is nothing to sync with");
+            }
+        }
+        url = url.trim();
+        try {
+            new java.net.URL(url);
+        } catch (java.net.MalformedURLException ex) {
+            throw new SetupException("Not a valid url: " + url + " - it should look like https://your-site/repo/branch", ex);
+        }
+        return url;
     }
 
     public static void withDir(CheckedConsumer<File> s, Options options, CommandLine line) throws Exception {
