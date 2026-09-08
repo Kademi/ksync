@@ -1,0 +1,2 @@
+# keep CRLF exactly as stored, raw.githubusercontent.com serves the blob as-is
+*.cmd -text
