@@ -87,7 +87,18 @@ chmod +x "$BIN_DIR/ksync3"
 echo "Installed ksync3 to $BIN_DIR/ksync3"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "NOTE: $BIN_DIR is not on your PATH. Add this to your shell profile (~/.bashrc, ~/.zshrc):"
-     echo "  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  *)
+    # Put BIN_DIR on the PATH for the login shell. Ubuntu's default .profile does this itself
+    # once ~/.local/bin exists, but macOS and most other distros do not.
+    case "${SHELL##*/}" in
+      zsh)  PROFILE=$HOME/.zshrc;  LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+      fish) PROFILE=$HOME/.config/fish/config.fish; LINE="fish_add_path $BIN_DIR" ;;
+      bash) PROFILE=$HOME/.bashrc; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+      *)    PROFILE=$HOME/.profile; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+    esac
+    mkdir -p "$(dirname "$PROFILE")"
+    grep -qsF "$LINE" "$PROFILE" || printf '\n# ksync3\n%s\n' "$LINE" >> "$PROFILE"
+    echo "Added $BIN_DIR to your PATH in $PROFILE. Open a new terminal to pick it up."
+    ;;
 esac
 echo "Uninstall: rm -rf \"$HOME_DIR\" \"$BIN_DIR/ksync3\""
