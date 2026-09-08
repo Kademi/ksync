@@ -140,6 +140,7 @@ public class KSync3 {
         commands.add(new PublishCommand());
         commands.add(new LoginCommand());
         commands.add(new IgnoreCommand());
+        commands.add(new VerifyCommand());
     }
 
     public static void main(String[] arg) {
@@ -404,6 +405,19 @@ public class KSync3 {
         }
     }
 
+    public static class VerifyCommand implements Command {
+
+        @Override
+        public String getName() {
+            return "verify";
+        }
+
+        @Override
+        public void execute(Options options, CommandLine line) throws Exception {
+            verify(options, line);
+        }
+    }
+
     /**
      * Whether a failure means the server could not be reached, as against a server that answered
      * with a refusal. Worth telling apart in a status bar: the first often clears on its own when
@@ -635,6 +649,21 @@ public class KSync3 {
         }, line, options, false);
         log.info("Done");
         System.exit(0); // threads arent shutting down
+    }
+
+    /**
+     * Asks the server which files in this version are missing objects, and reports them.
+     *
+     * Exits 1 when anything is missing, so a script or an assistant can act on the answer without
+     * reading the output. This reports a fault in the version, not a fault in the command, so it
+     * has to be distinguishable from a clean check.
+     */
+    private static void verify(Options options, CommandLine line) throws Exception {
+        int[] missing = new int[]{0};
+        KSyncUtils.withKSync((File configDir, KSync3 k) -> {
+            missing[0] = k.verify();
+        }, line, options, false);
+        System.exit(missing[0] > 0 ? 1 : 0);
     }
 
     private final File localDir;
@@ -1223,6 +1252,32 @@ public class KSync3 {
         status.errorCount(errors.size());
         status.state(SyncState.IDLE, "pulled");
         return newLocalHash;
+    }
+
+    /**
+     * Runs the whole-branch missing object check on the server and reports what it finds.
+     *
+     * The walk is the server's, because only the server knows what is in its stores. It is not
+     * cheap on a large branch, hence the line saying it has started.
+     *
+     * @return the number of missing objects
+     */
+    private int verify() throws IOException {
+        log.info("Checking {} for missing objects, this walks the whole version..", remoteAddress);
+        Map<String, String> params = new HashMap<>();
+        params.put("findMissingObjects", "true");
+        String res;
+        try {
+            res = client.post(branchPath, params);
+        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
+            throw new IOException("Could not run the missing object check: " + ex.getMessage(), ex);
+        }
+        MissingObjects missing = MissingObjects.parse(res);
+        log.info("");
+        for (String reportLine : missing.report()) {
+            log.info(reportLine);
+        }
+        return missing.getObjects().size();
     }
 
     private String getRemoteHash(String path) {
