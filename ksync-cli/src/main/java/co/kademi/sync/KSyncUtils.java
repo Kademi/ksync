@@ -34,7 +34,8 @@ public class KSyncUtils {
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
 
-            String url = requireUrl(KSync3Utils.getInput(options, line, "url", props, needsUrl), dir, options, line);
+            String url = requireUrl(givenUrl(options, line, props, needsUrl), dir, options, line);
+            RepoMeta.Tracking tracking = trackingFor(url, props);
             migrateLegacyCredentials(url, configDir);
 
             String auth = line.getOptionValue("auth");
@@ -61,11 +62,49 @@ public class KSyncUtils {
             }
             String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
             List<String> ignores = GlobalIgnores.combine(KSync3Utils.split(sIgnores));
-            KSyncUtils.writeProps(url, user, configDir);
 
-            KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth);
+            // Constructed before the properties are written, because when this checkout follows a
+            // repository the url to record is the version it resolves to, not the one given here
+            KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth, tracking);
+            KSyncUtils.writeProps(kSync3.getRemoteAddress(), user, kSync3.getTrackedRepoUrl(), configDir);
             command.accept(kSync3);
         }, options, line);
+    }
+
+    /**
+     * The url to work from, before it is known whether it names a repository or a version.
+     *
+     * A checkout which follows a repository has both in its properties - the repository, and the
+     * version most recently resolved from it - and the repository is the one to start from, or the
+     * version it settled on last time would pin it there forever.
+     */
+    private static String givenUrl(Options options, CommandLine line, Properties props, boolean needsUrl) {
+        String fromCommandLine = line.getOptionValue("url");
+        if (StringUtils.isNotBlank(fromCommandLine)) {
+            return fromCommandLine;
+        }
+        String repoUrl = props.getProperty("repoUrl");
+        if (StringUtils.isNotBlank(repoUrl)) {
+            return repoUrl;
+        }
+        return KSync3Utils.getInput(options, line, "url", props, needsUrl);
+    }
+
+    /**
+     * Whether the server has to be asked which version this checkout belongs on.
+     *
+     * A checkout already pointed at a version it has used before asks nothing, so the common case
+     * costs no request. Anything new or changed is worth one question, and the answer is recorded
+     * so it is only asked once.
+     */
+    static RepoMeta.Tracking trackingFor(String url, Properties props) {
+        if (url.equals(props.getProperty("repoUrl"))) {
+            return RepoMeta.Tracking.TRACK;
+        }
+        if (url.equals(props.getProperty("url"))) {
+            return RepoMeta.Tracking.OFF;
+        }
+        return RepoMeta.Tracking.PROBE;
     }
 
     /**
@@ -267,14 +306,42 @@ public class KSyncUtils {
         void accept(File configDir, KSync3 k) throws Exception;
     }
 
+    /**
+     * Records the url and user. Leaves any repository being followed alone - use the overload
+     * taking a repoUrl to change that.
+     */
     public static void writeProps(String url, String user, File repoDir) {
+        writeProps(url, user, readProps(repoDir).getProperty("repoUrl"), repoDir);
+    }
+
+    /**
+     * Records the url and user, and the repository this checkout follows.
+     *
+     * @param url the version url being synced
+     * @param repoUrl the repository whose latest version that is, or null if the checkout is
+     * pinned to the version, which stops it following anything it followed before
+     */
+    public static void writeProps(String url, String user, String repoUrl, File repoDir) {
         Properties props = readProps(repoDir);
+        boolean tracking = StringUtils.isNotBlank(repoUrl);
         if (StringUtils.isNotBlank(url)) {
             String oldUrl = props.getProperty("url");
-            if (oldUrl != null && !oldUrl.equals(url)) {
+            // Moving between two versions of the same repository keeps the recorded hash. It is the
+            // head of the version being left, and that is exactly the base a pull needs to work out
+            // what changed between the two - dropping it would make every file in the new version
+            // look new, resurrecting deletions and manufacturing conflicts. A url pointing
+            // somewhere else entirely has no such relationship, so it still clears it.
+            boolean sameRepo = tracking && oldUrl != null
+                    && RepoMeta.withTrailingSlash(oldUrl).startsWith(RepoMeta.withTrailingSlash(repoUrl));
+            if (oldUrl != null && !oldUrl.equals(url) && !sameRepo) {
                 props.remove("remoteHash"); // no longer valid if url is changing
             }
             props.put("url", url);
+        }
+        if (tracking) {
+            props.put("repoUrl", repoUrl);
+        } else {
+            props.remove("repoUrl");
         }
         if (StringUtils.isNotBlank(user)) {
             String oldUser = props.getProperty("user");

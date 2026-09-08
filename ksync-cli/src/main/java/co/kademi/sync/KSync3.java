@@ -693,7 +693,20 @@ public class KSync3 {
     private final ScheduledExecutorService scheduledExecutorService;
 
     private final List<String> errors = new ArrayList<>();
+
+    /** The url of the version being synced, which is what every request here is relative to. */
     private final String remoteAddress;
+
+    /**
+     * The repository url this checkout follows, or null when it is pinned to one version.
+     *
+     * When set, remoteAddress was resolved from it on startup and is the latest version at that
+     * moment, rather than something a person chose once and has to maintain by hand.
+     */
+    private final String trackedRepoUrl;
+
+    /** The metadata read while resolving the version, or null when this checkout is pinned. */
+    private RepoMeta repoMeta;
 
     /**
      * Publishes what this sync is doing to the status file and, for the sync command, the OS
@@ -706,13 +719,13 @@ public class KSync3 {
     }
 
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException, IOException {
+        this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, oauth, RepoMeta.Tracking.OFF);
+    }
+
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies, OAuth2Client oauth, RepoMeta.Tracking tracking) throws MalformedURLException, IOException {
         this.localDir = localDir;
         this.configDir = configDir;
         this.ignores = ignores;
-        this.remoteAddress = sRemoteAddress;
-        this.status = publishesStatus()
-                ? SyncStatusReporter.create(commandName, localDir, configDir, sRemoteAddress, statusFile, wantsTray())
-                : SyncStatusReporter.none();
         eventManager = new EventManagerImpl();
 
         int timeout = 180000;
@@ -734,10 +747,24 @@ public class KSync3 {
         client.setTimeout(timeout);
         log.debug("Using timeout of " + timeout + "ms");
         client.setUseDigestForPreemptiveAuth(false);
-        branchPath = url.getFile();
         if (cookies != null) {
             client.getCookies().putAll(cookies);
         }
+
+        // Which version to work against. Only now, because asking the repository needs the client,
+        // and everything below is relative to the answer.
+        //
+        // Asked once, here, and held for the life of the process. A long running sync deliberately
+        // does not watch for a newer version appearing: publishing one is something a developer
+        // does, at a moment of their choosing, so they already know it happened and can restart the
+        // sync. Switching version underneath a running sync would mean moving the working copy
+        // while file watches are live, which is a real risk taken in exchange for nothing.
+        this.trackedRepoUrl = trackedRepoUrl(tracking, sRemoteAddress);
+        this.remoteAddress = trackedRepoUrl == null ? sRemoteAddress : latestVersionUrl(trackedRepoUrl);
+        this.status = publishesStatus()
+                ? SyncStatusReporter.create(commandName, localDir, configDir, remoteAddress, statusFile, wantsTray())
+                : SyncStatusReporter.none();
+        branchPath = new URL(remoteAddress).getFile();
 
         repoDir = new File(localDir, ".ksync");
         this.localBlobStore = new FileSystem2BlobStore(new File(repoDir, "blobs"));
@@ -782,7 +809,11 @@ public class KSync3 {
         }
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
-        File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(sRemoteAddress));
+        // Keyed on the repository when following one, not on the version. The cache is about local
+        // files, so it stays valid across a version change, and rebuilding it on every release
+        // would be a slow scan of the whole checkout for nothing.
+        String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
+        File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(cacheKey));
         fileHashCache = new BerkeleyDbFileHashCache(envDir);
 
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
@@ -801,6 +832,59 @@ public class KSync3 {
 //            needsPush.set(true);
 //        }, null, fileWatchService, null, fileHashCache);
 
+    }
+
+    /**
+     * The repository url this checkout follows, or null when it is pinned to a version.
+     *
+     * A probe is optimistic: if the server cannot be reached to answer it, carry on with the url as
+     * given rather than failing here. Whatever the command does next will report the real problem,
+     * and it will report it better than a question about metadata would.
+     */
+    private String trackedRepoUrl(RepoMeta.Tracking tracking, String sRemoteAddress) throws IOException {
+        if (tracking == RepoMeta.Tracking.OFF) {
+            return null;
+        }
+        try {
+            repoMeta = RepoMeta.fetch(client, sRemoteAddress);
+        } catch (IOException ex) {
+            if (tracking == RepoMeta.Tracking.TRACK) {
+                throw ex; // it is known to be a repository, so there is no version to fall back to
+            }
+            log.debug("Could not check whether {} is a repository, treating it as a version", sRemoteAddress, ex);
+            return null;
+        }
+        if (repoMeta == null) {
+            if (tracking == RepoMeta.Tracking.TRACK) {
+                throw new SetupException(sRemoteAddress + " no longer answers as a repository."
+                        + " Point -url at a version to pin this checkout to one");
+            }
+            return null;
+        }
+        return sRemoteAddress;
+    }
+
+    /**
+     * The url of the latest version of the tracked repository, reporting which version that is and
+     * whether it has moved since this checkout last ran.
+     */
+    private String latestVersionUrl(String repoUrl) {
+        RepoMeta.Version latest = repoMeta.getLatestVersion();
+        if (latest == null) {
+            throw new SetupException("No version of " + repoUrl + " has a version number for a name,"
+                    + " so there is no latest one to follow. It has: " + String.join(", ", repoMeta.versionNames())
+                    + ". Point -url at one of those to pin this checkout to it");
+        }
+        String url = RepoMeta.versionUrl(repoUrl, latest.getName());
+        String previous = KSyncUtils.readProps(configDir).getProperty("url");
+        if (previous != null && !previous.equals(url)) {
+            // Not a debug line: this changes which version the next push writes to
+            log.info("Version {} is now the latest of {}, moving this checkout from {}",
+                    latest.getName(), repoUrl, RepoMeta.versionNameOf(previous));
+        } else {
+            log.info("Version {} is the latest of {}", latest.getName(), repoUrl);
+        }
+        return url;
     }
 
     private void start() throws MalformedURLException, IOException {
@@ -1436,6 +1520,16 @@ public class KSync3 {
                 }
             }
         }
+    }
+
+    /** @return the url of the version being synced, which is the resolved one when following a repository */
+    public String getRemoteAddress() {
+        return remoteAddress;
+    }
+
+    /** @return the repository url being followed, or null when this checkout is pinned to a version */
+    public String getTrackedRepoUrl() {
+        return trackedRepoUrl;
     }
 
     public String getBranchPath() {
