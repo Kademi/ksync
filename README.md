@@ -37,6 +37,12 @@ Where it goes:
 
 Uninstall on Linux or macOS by deleting those two paths, on Windows by running `uninstall.cmd` in the install folder. Override with `KSYNC3_HOME` and, on Linux or macOS, `KSYNC3_BIN`.
 
+## Wrapper scripts
+If you have a clone of this repo, [scripts](./scripts) holds thin wrappers that run the jar in
+[dist](./dist) - `ksync-sync pull` rather than a line of jvm arguments - for macOS, Linux and
+Windows, with a one line way to get them onto a Windows PATH. The installers above are the way in
+for everyone else. See [scripts/README.md](./scripts/README.md).
+
 ## Documentation
 Please read at [here](https://docs.kademi.co/blogs/docs-kb/developing-with-ksync/)
 

@@ -67,6 +67,12 @@ public class KSyncUtils {
             // repository the url to record is the version it resolves to, not the one given here
             KSync3 kSync3 = new KSync3(dir, url, user, pwd, configDir, background, ignores, cookies, oauth, tracking);
             KSyncUtils.writeProps(kSync3.getRemoteAddress(), user, kSync3.getTrackedRepoUrl(), configDir);
+            if (pwd != null) {
+                // The password was used for this one run and then thrown away, so every sync and
+                // every pull asked for it again - only the login command ever stored anything.
+                // Trade it for the same session that command saves, once, here.
+                kSync3.saveLogin();
+            }
             command.accept(kSync3);
         }, options, line);
     }

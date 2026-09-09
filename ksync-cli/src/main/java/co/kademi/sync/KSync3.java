@@ -823,8 +823,7 @@ public class KSync3 {
                     push(rootHash, configDir);
 
                 } catch (Exception ex) {
-                    log.error("Exception in file changed event handler", ex);
-                    status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
+                    pushFailed(ex);
                 }
             }
         }, null, fileSystemWatchingService, ignores, fileHashCache);
@@ -832,6 +831,46 @@ public class KSync3 {
 //            needsPush.set(true);
 //        }, null, fileWatchService, null, fileHashCache);
 
+    }
+
+    /**
+     * Reports a background push that failed, and ends the sync when it can only fail again.
+     *
+     * A sync is built to outlive a bad push: the server may be down, or a pull may be needed, and
+     * the next change is worth trying. An expired login is not like that. Nothing this process can
+     * do will renew it, so every later push fails identically, and a sync still running while
+     * saving nothing is worse than one that stopped - whoever is editing files has no reason to
+     * suspect their work is going nowhere.
+     *
+     * No stack trace for that one: it is understood, and the message names the single thing to do
+     * about it. This is the same treatment the one-shot commands get in {@link #handleKSync}.
+     */
+    private void pushFailed(Exception ex) {
+        if (!reportPushFailure(status, ex)) {
+            return;
+        }
+        // Left in a state that says what happened, because this runs on a watch thread with
+        // nobody at the terminal: the status file and the notification are how it gets noticed
+        status.stopped();
+        status.close();
+        System.exit(1);
+    }
+
+    /**
+     * Logs and records a failed push.
+     *
+     * @return true when the sync cannot continue, so the process should end
+     */
+    static boolean reportPushFailure(SyncStatusReporter status, Exception ex) {
+        NotLoggedInException notLoggedIn = NotLoggedInException.find(ex);
+        if (notLoggedIn == null) {
+            log.error("Exception in file changed event handler", ex);
+            status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
+            return false;
+        }
+        log.error(notLoggedIn.getMessage());
+        status.problem(SyncState.FAILED, notLoggedIn.getMessage());
+        return true;
     }
 
     /**
@@ -897,7 +936,23 @@ public class KSync3 {
         status.ready("watching for local changes");
     }
 
+    /**
+     * Signs in with the password this instance was built with, and stores the session cookie the
+     * server hands back so the next command does not need the password.
+     *
+     * @param secondFactor a 2FA code, or null on the first attempt
+     */
     private void login(String secondFactor) {
+        login(secondFactor, true);
+    }
+
+    /**
+     * @param mayAskFor2FA whether a second factor can be prompted for. True for the login
+     * command, where someone is waiting at a terminal for exactly this. False when saving a
+     * session on the way into another command: a sync run from cron or a desktop launcher has
+     * nobody to answer, and would sit on a stdin that never produces a line
+     */
+    private void login(String secondFactor, boolean mayAskFor2FA) {
         log.debug("login");
 
         HttpClient hc = this.client.getClient();
@@ -920,10 +975,15 @@ public class KSync3 {
             int res = result.getStatusCode();
             switch (res) {
                 case 401:
+                    if (!mayAskFor2FA) {
+                        log.info("Could not save a session for {}: the server asked for a second factor."
+                                + " Run: ksync -command login", client.server);
+                        break;
+                    }
                     log.info("Authentication failed. Is 2FA required?");
                     String s = KSync3Utils.getInput("2FA code");
                     if (StringUtils.isNotBlank(s)) {
-                        login(s);
+                        login(s, mayAskFor2FA);
                     } else {
                         log.info("Login aborted");
                     }
@@ -933,57 +993,12 @@ public class KSync3 {
                     break;
                 case 200:
                     log.debug("login: completed {}", res);
-                    // save auth token cookie to props file
-                    boolean foundCookie = false;
-                    List<String> cookies = new ArrayList<>();
-
-                    Map<String, String> headers = result.getHeaders();
-                    if (headers != null) {
-                        String cookieString = headers.get("Set-Cookie");
-
-                        String[] cookieStrings = StringUtils.split(cookieString, "\n");
-                        cookies = Arrays.asList(cookieStrings);
-                    }
-                    //List<String> cookies = result.getHeaderValues("Set-Cookie");
-                    for (String setCookie : cookies) {
-                        log.debug("Parsing a Set-Cookie header from the login response");
-                        // miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
-                        // miltonUserUrlHash="YYY-XXX-YYY-ZZZ-XXX:DDDD"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
-                        String[] arr = setCookie.split("\"");
-                        String cookieName = arr[0];
-                        if (cookieName.startsWith("miltonUserUrlHash")) {
-                            String userUrlHash = arr[1];
-                            String userUrl = "/users/" + this.client.user + "/";
-                            KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.remoteAddress);
-                            foundCookie = true;
-                            break;
-                        }
-                    }
-                    if (!foundCookie) {
-                        // Now try using the format where all cookies are in one line:
-                        // miltonUserUrl=b64L3VzZXJzL2thZGVtaWJyYWQv; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT, miltonUserUrlHash="dd-dd-dd-dd-dd:ddd"; Path=/; Expires=Sat, 21-Mar-2020 02:05:55 GMT; HttpOnly
-                        for (String setCookie : cookies) {
-                            log.debug("Parsing a combined Set-Cookie header from the login response");
-                            String key = "miltonUserUrlHash=\"";
-                            int pos = setCookie.indexOf(key);
-                            if (pos > 0) {
-                                String hash = setCookie.substring(pos + key.length());
-                                // deliberately not logged: this is the auth hash itself
-                                hash = hash.substring(0, hash.indexOf("\""));
-                                
-                                String userUrlHash = hash;
-                                String userUrl = "/users/" + this.client.user + "/";
-                                KSyncUtils.writeLoginProps(userUrl, userUrlHash, this.remoteAddress);
-                                foundCookie = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!foundCookie) {
+                    String userUrlHash = userUrlHashFrom(result.getHeaders());
+                    if (userUrlHash == null) {
                         log.warn("Login seemed to succeed, but didnt find an authorisation cookie");
+                    } else {
+                        KSyncUtils.writeLoginProps("/users/" + this.client.user + "/", userUrlHash, this.remoteAddress);
                     }
-
                     break;
 
                 default:
@@ -993,6 +1008,60 @@ public class KSync3 {
         } catch (IOException ex) {
             log.error("login: exception occured", ex);
         }
+    }
+
+    /**
+     * Saves a session for the password this instance was built with, so the next command runs
+     * without asking for it.
+     *
+     * Only worth calling when a password was actually used. Failing is not the command's failure:
+     * the password in hand authenticates every request either way, so whatever was asked for goes
+     * ahead, and the only cost is being asked for the password again next time.
+     */
+    void saveLogin() {
+        log.debug("Trading the password for a session, so it is not needed next time");
+        try {
+            login(null, false);
+        } catch (RuntimeException ex) {
+            log.warn("Could not save a session for {}, so the password will be needed again next time: {}",
+                    remoteAddress, ex.getMessage());
+        }
+    }
+
+    /**
+     * Reads the milton auth cookie out of a login response.
+     *
+     * Servers return these in two shapes - one Set-Cookie header per cookie, and every cookie on
+     * a single line - so this looks for the cookie by name anywhere in the value rather than
+     * expecting it in a particular place:
+     *
+     * <pre>
+     * miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
+     * miltonUserUrlHash="YYY-XXX-YYY-ZZZ-XXX:DDDD"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
+     * </pre>
+     *
+     * @return the userUrlHash cookie value, or null when the response carries no such cookie
+     */
+    static String userUrlHashFrom(Map<String, String> headers) {
+        if (headers == null) {
+            return null;
+        }
+        String setCookie = headers.get("Set-Cookie");
+        if (StringUtils.isBlank(setCookie)) {
+            return null;
+        }
+        String key = "miltonUserUrlHash=\"";
+        int pos = setCookie.indexOf(key);
+        if (pos < 0) {
+            return null;
+        }
+        String rest = setCookie.substring(pos + key.length());
+        int end = rest.indexOf('"');
+        if (end < 0) {
+            return null; // unterminated, so there is no value to be read out of it
+        }
+        // deliberately not logged, and not put in any exception: this is the auth hash itself
+        return rest.substring(0, end);
     }
 
     public static HttpResult executeHttpWithResult(HttpClient client, HttpUriRequest m, OutputStream out, HttpContext context) throws IOException {
