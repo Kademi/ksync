@@ -73,32 +73,6 @@ public class ConflictResolversTest {
     }
 
     @Test
-    public void modeParsing() {
-        assertEquals(Mode.AUTO, ConflictResolvers.parseMode(null));
-        assertEquals(Mode.AUTO, ConflictResolvers.parseMode("  "));
-        assertEquals(Mode.AUTO, ConflictResolvers.parseMode("auto"));
-        assertEquals(Mode.GUI, ConflictResolvers.parseMode("gui"));
-        assertEquals(Mode.GUI, ConflictResolvers.parseMode("GUI"));
-        assertEquals(Mode.CONSOLE, ConflictResolvers.parseMode("console"));
-        assertEquals(Mode.CONSOLE, ConflictResolvers.parseMode(" Console "));
-    }
-
-    /** A typo must be reported, not silently treated as the default. */
-    @Test
-    public void anUnknownModeIsRejected() {
-        try {
-            ConflictResolvers.parseMode("popup");
-            fail("expected the typo to be rejected");
-        } catch (IllegalArgumentException ex) {
-            assertTrue(ex.getMessage(), ex.getMessage().contains("auto, gui, console"));
-        }
-    }
-
-    /**
-     * -localwins settles every conflict on its own, so no mode gets to put a dialog or a prompt
-     * in the way - including the mode that explicitly asked for one.
-     */
-    @Test
     public void localWinsNeverAsks() {
         for (Mode mode : Mode.values()) {
             assertTrue(mode.name(), ConflictResolvers.create(mode, true) instanceof LocalWinsConflictResolver);

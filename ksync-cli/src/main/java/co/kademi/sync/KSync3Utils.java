@@ -4,11 +4,7 @@ import java.io.Console;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.Scanner;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.Option;
-import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,17 +27,6 @@ public class KSync3Utils {
         return fname;
     }
 
-
-    public static KSync3.Command findCommand(CommandLine line, List<KSync3.Command> commands) {
-        String cmd = line.getOptionValue("command");
-        for (KSync3.Command c : commands) {
-            if (c.getName().equals(cmd)) {
-                return c;
-            }
-        }
-        return null;
-    }
-
     public static String getInput(String text) {
         Console con = System.console();
         String s;
@@ -55,45 +40,41 @@ public class KSync3Utils {
         return s;
     }
 
-    public static String getInput(Options options, CommandLine line, String optionName, Properties props) {
-        return getInput(options, line, optionName, props, true);
+    /**
+     * The value to use for an option, asking for it when it is missing and
+     * there is someone to ask.
+     *
+     * The command line is the first source, and picocli has already filled in
+     * anything the checkout's own properties file could answer, so what reaches
+     * here is genuinely absent.
+     *
+     * @param given
+     * @param optionName
+     * @param description
+     * @return
+     */
+    public static String resolve(String given, String optionName, String description) {
+        return resolve(given, optionName, description, true);
     }
 
-    public static String getInput(Options options, CommandLine line, String optionName, Properties props, boolean promptIfNotPresent) {
-        // always take value from command line if present
-        String cmdLineVal = line.getOptionValue(optionName);
-        if (StringUtils.isNotBlank(cmdLineVal)) {
-            return cmdLineVal;
+    public static String resolve(String given, String optionName, String description, boolean promptIfNotPresent) {
+        if (StringUtils.isNotBlank(given)) {
+            return given;
         }
-
-        // Then try the properties file..
-        if (props != null && props.containsKey(optionName)) {
-            String s = props.getProperty(optionName);
-            if (StringUtils.isNotBlank(s)) {
-                return s;
-            }
-        }
-
         if (!promptIfNotPresent) {
             return null;
         }
-
-        // No value on command line or in props file, and promptIfNotPresent is enabled so ask the user
-        Option opt = options.getOption(optionName);
         Console con = System.console();
         if (con != null) {
-            cmdLineVal = con.readLine("Please enter " + optionName + " - " + opt.getDescription() + ": ");
-        } else {
-            Scanner scanner = new Scanner(System.in);
-            System.out.println("Please enter " + optionName + " - " + opt.getDescription() + ": ");
-            cmdLineVal = scanner.nextLine();
+            return con.readLine("Please enter " + optionName + " - " + description + ": ");
         }
-
-        return cmdLineVal;
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("Please enter " + optionName + " - " + description + ": ");
+        return scanner.nextLine();
     }
 
-    public static String getPassword(CommandLine line, String user, String url) {
-        String s = line.getOptionValue("password");
+    public static String getPassword(String given, String user, String url) {
+        String s = given;
         if (StringUtils.isBlank(s)) {
             Console con = System.console();
             if (con != null) {
@@ -108,40 +89,44 @@ public class KSync3Utils {
         return s;
     }
 
-    public static String getOrCreateAppDirectory(CommandLine line) {
-        String curDir = System.getProperty("user.dir");
-        String appDir = line.getOptionValue("appdir");
-        if(StringUtils.isNotEmpty(appDir)) {
-            curDir = appDir;                
+    /**
+     * The directory a command works on, without creating anything.
+     *
+     * Read only because the default value provider calls it while the command
+     * line is still being parsed, and parsing must not leave directories behind
+     * on disk.
+     *
+     * @param appDir
+     * @param appName
+     * @return
+     */
+    public static File checkoutDir(String appDir, String appName) {
+        String curDir = StringUtils.isNotEmpty(appDir) ? appDir : System.getProperty("user.dir");
+        if (StringUtils.isNotEmpty(appName)) {
+            curDir = curDir + "/" + appName;
         }
-        String s = line.getOptionValue("appname");
-        if(StringUtils.isNotEmpty(appDir) && StringUtils.isEmpty(s)) {
+        return new File(curDir);
+    }
+
+    /**
+     * The same directory, created if a ksync:// link named one that does not
+     * exist yet.
+     *
+     * @param appDir
+     * @param appName
+     * @return
+     */
+    public static String getOrCreateAppDirectory(String appDir, String appName) {
+        if (StringUtils.isNotEmpty(appDir) && StringUtils.isEmpty(appName)) {
             log.error("The appname option is required when using a ksync uri");
-            System.exit(0);
+            System.exit(1);
         }
-
-        if(StringUtils.isNotEmpty(s)) {
-            curDir = curDir +"/"+ s;
-            File f = new File(curDir);
-            if(!f.exists()) {
-                log.info("Creating the app directory {}", curDir);
-                f.mkdir();
-            }
+        File dir = checkoutDir(appDir, appName);
+        if (StringUtils.isNotEmpty(appName) && !dir.exists()) {
+            log.info("Creating the app directory {}", dir.getAbsolutePath());
+            dir.mkdir();
         }
-        return curDir;
-    }
-    
-    public static File getRootDir(CommandLine line) {
-        String s = line.getOptionValue("rootdir");
-        if (StringUtils.isBlank(s)) {
-            s = System.getProperty("user.dir");
-        }
-        //s = "/home/brad/proj/kademi-dev/src/main/marketplace/";
-        return new File(s);
-    }
-
-    public static boolean getBooleanInput(CommandLine line, String opt) {
-        return line.hasOption(opt);
+        return dir.getAbsolutePath();
     }
 
     public static List<String> split(String s) {
@@ -158,7 +143,4 @@ public class KSync3Utils {
         }
     }
 
-    static boolean ignored(String name, List<String> ignores) {
-        return io.milton.sync.Utils.matchesAny(name, ignores);
-    }
 }

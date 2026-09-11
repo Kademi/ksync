@@ -70,7 +70,7 @@ public class ExpiredSessionEndsSyncTest {
     public void anExpiredSessionEndsTheSync() throws Exception {
         Recorder r = new Recorder();
         SyncStatusReporter status = reporter(r);
-        NotLoggedInException ex = new NotLoggedInException("The session for acme has expired. Run: ksync -command login -oauth");
+        NotLoggedInException ex = new NotLoggedInException("The session for acme has expired. Run: ksync3 login --oauth");
 
         assertTrue(KSync3.reportPushFailure(status, ex));
         assertEquals(SyncState.FAILED, r.last().getState());

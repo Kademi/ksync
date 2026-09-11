@@ -1,11 +1,10 @@
 package io.milton.sync.triplets;
 
-import co.kademi.sync.GlobalIgnores;
+import co.kademi.sync.Ignores;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.WatchKey;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,7 +27,7 @@ public class FileSystemWatchingServiceIgnoresTest {
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
-    private List<WatchKey> watch(File root, List<String> ignores) throws IOException {
+    private List<WatchKey> watch(File root, Ignores ignores) throws IOException {
         FileSystemWatchingService svc = new FileSystemWatchingService(
                 FileSystems.getDefault().newWatchService(), null);
         return svc.watch(root, (event, changed) -> {
@@ -43,11 +42,11 @@ public class FileSystemWatchingServiceIgnoresTest {
         new File(root, "node_modules/leftpad/dist").mkdirs();
         new File(root, "node_modules/other").mkdirs();
 
-        List<WatchKey> withIgnores = watch(root, GlobalIgnores.BUILT_IN);
+        List<WatchKey> withIgnores = watch(root, Ignores.of(Ignores.BUILT_IN));
         assertEquals("only the root and theme should be watched", 2, withIgnores.size());
 
         // and without them, to show the test is measuring the thing it claims to
-        List<WatchKey> withoutIgnores = watch(root, null);
+        List<WatchKey> withoutIgnores = watch(root, Ignores.none());
         assertTrue("unignored, node_modules should add watches: " + withoutIgnores.size(),
                 withoutIgnores.size() > withIgnores.size());
     }
@@ -58,7 +57,7 @@ public class FileSystemWatchingServiceIgnoresTest {
         new File(root, "keep").mkdirs();
         new File(root, "huge-generated-thing").mkdirs();
 
-        assertEquals(2, watch(root, Arrays.asList("huge-generated-thing")).size());
+        assertEquals(2, watch(root, Ignores.of("huge-generated-thing")).size());
     }
 
     /**
@@ -72,12 +71,12 @@ public class FileSystemWatchingServiceIgnoresTest {
      */
     @Test
     public void aDirectoryCreatedWhileWatchingIsNotWatchedIfIgnored() throws Exception {
-        assertFalse(seesFileCreatedInside("node_modules", GlobalIgnores.BUILT_IN));
+        assertFalse(seesFileCreatedInside("node_modules", Ignores.of(Ignores.BUILT_IN)));
         // and the control, so the test is measuring the thing it claims to
-        assertTrue(seesFileCreatedInside("packages", GlobalIgnores.BUILT_IN));
+        assertTrue(seesFileCreatedInside("packages", Ignores.of(Ignores.BUILT_IN)));
     }
 
-    private boolean seesFileCreatedInside(String dirName, List<String> ignores) throws Exception {
+    private boolean seesFileCreatedInside(String dirName, Ignores ignores) throws Exception {
         File root = tmp.newFolder();
         Set<String> seen = ConcurrentHashMap.newKeySet();
         FileSystemWatchingService svc = new FileSystemWatchingService(

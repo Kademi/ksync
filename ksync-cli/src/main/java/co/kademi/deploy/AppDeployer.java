@@ -3,6 +3,7 @@
  */
 package co.kademi.deploy;
 
+import co.kademi.sync.commands.PublishCommand;
 import co.kademi.sync.KSync3Utils;
 import co.kademi.sync.KSyncUtils;
 import static co.kademi.sync.KSyncUtils.writeLoginProps;
@@ -59,8 +60,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.Options;
 import org.apache.commons.collections.ComparatorUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -115,28 +114,7 @@ public class AppDeployer {
         return new AppProperties(DEFAULT_VERSION, null);
     }
 
-    public static void incrementVersionNumber(File appDir, String versionName) {
-        String s = getIncrementedVersionNumber(versionName);
-        File versionFile = new File(appDir, "app-version.txt");
-        try {
-            FileUtils.write(versionFile, s);
-        } catch (IOException ex) {
-            throw new RuntimeException(ex);
-        }
-    }
-
-    public static String getIncrementedVersionNumber(String versionName) {
-        String[] arr = versionName.split("[.]");
-        int part = Integer.parseInt(arr[arr.length - 1]);
-        part++;
-        String result = "";
-        for (int i = 0; i < arr.length - 1; i++) {
-            result += arr[i] + ".";
-        }
-        return result + part;
-    }
-
-    public static void publish(Options options, CommandLine line) throws Exception {
+    public static void publish(PublishCommand cmd) throws Exception {
         log.info("Publishing..");
 
         KSyncUtils.withDir((File dir) -> {
@@ -147,49 +125,46 @@ public class AppDeployer {
 
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
-            Properties props = KSyncUtils.readProps(configDir);
 
-            String url = KSync3Utils.getInput(options, line, "url", props, true);
+            String url = cmd.connection.url;
             log.debug(url);
             KSyncUtils.migrateLegacyCredentials(url, configDir);
 
-            String auth = line.getOptionValue("auth");
-            if (StringUtils.isNotBlank(auth) && auth.contains(",")) {
-                String[] arr = auth.split(",");
+            String authToken = cmd.connection.authToken();
+            if (StringUtils.isNotBlank(authToken) && authToken.contains(",")) {
+                String[] arr = authToken.split(",");
                 String userName = arr[0].trim();
                 String token = arr[1].trim();
                 String userUrl = "/users/" + userName;
                 writeLoginProps(userUrl, token, url);
-                props = KSyncUtils.readProps(configDir);
             }
 
             Map cookies = KSyncUtils.getCookies(url);
-            OAuth2Client oauth = KSyncUtils.oauth2SessionOrNull(url);
-            String user = KSync3Utils.getInput(options, line, "user", props, oauth == null && cookies.isEmpty());
+            OAuth2Client oauth = KSyncUtils.oauth2SessionOrNull(url, cmd.connection.apiKey);
+            // see KSyncUtils.withKsync: --user is in an exclusive group, so no default reaches it
+            Properties props = KSyncUtils.readProps(configDir);
+            String givenUser = StringUtils.defaultIfBlank(cmd.connection.user(), props.getProperty("user"));
+            String user = KSync3Utils.resolve(givenUser, "user", KSyncUtils.USER_PROMPT, oauth == null && cookies.isEmpty());
             String password = null;
             if (oauth == null && cookies.isEmpty()) {
-                password = KSync3Utils.getPassword(line, user, url);
+                password = KSync3Utils.getPassword(cmd.connection.password(), user, url);
             }
-            String appIds = KSync3Utils.getInput(options, line, "appids", null);
 
-            String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
-            List<String> ignores = co.kademi.sync.GlobalIgnores.combine(KSync3Utils.split(sIgnores));
+            co.kademi.sync.Ignores ignores = co.kademi.sync.Ignores.load(dir, KSync3Utils.split(cmd.connection.ignore));
 
             AppDeployer d;
             try {
-                d = new AppDeployer(dir, url, user, password, appIds, cookies, oauth);
-                d.autoIncrement = KSync3Utils.getBooleanInput(line, "versionincrement");
-                d.force = KSync3Utils.getBooleanInput(line, "force");
-                d.report = KSync3Utils.getBooleanInput(line, "report");
+                d = new AppDeployer(dir, url, user, password, cmd.appIds, cookies, oauth);
+                d.force = cmd.force;
+                d.report = cmd.report;
                 d.ignores = ignores;
 
                 log.debug("---- OPTIONS ----");
                 log.debug("url: " + url);
                 log.debug("dir: " + dir.getAbsolutePath());
-                log.debug("  -autoincrement: " + d.autoIncrement);
                 log.debug("  -report: " + d.report);
                 log.debug("  -force: " + d.force);
-                log.debug("  -appIds: " + appIds);
+                log.debug("  -appIds: " + cmd.appIds);
                 log.debug("  -ignore: " + ignores);
                 log.debug("--------------");
                 d.upsync();
@@ -202,7 +177,7 @@ public class AppDeployer {
             }
 
             log.debug("Completed");
-        }, options, line);
+        }, cmd);
     }
 
     private final File rootDir;
@@ -216,19 +191,18 @@ public class AppDeployer {
     private final BlobStore localBlobStore;
     private final HashStore localHashStore;
 
-    private boolean autoIncrement = false; // if true, update version numbers in files
     private boolean report; // if true, dont make any changes
     private boolean force;
-    private List<String> ignores;
+    private co.kademi.sync.Ignores ignores;
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
     private final SyncHashCache fileHashCache;
 
-    public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies) throws MalformedURLException {
-        this(dir, sRemoteAddress, user, password, sAppIds, cookies, null);
+    public AppDeployer(File dir, String sRemoteAddress, String user, String password, List<String> appIds, Map<String, String> cookies) throws MalformedURLException {
+        this(dir, sRemoteAddress, user, password, appIds, cookies, null);
     }
 
-    public AppDeployer(File dir, String sRemoteAddress, String user, String password, String sAppIds, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException {
+    public AppDeployer(File dir, String sRemoteAddress, String user, String password, List<String> appIds, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException {
         this.rootDir = dir;
 
         URL url = new URL(sRemoteAddress);
@@ -247,7 +221,7 @@ public class AppDeployer {
         client.setUseDigestForPreemptiveAuth(false);
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
-        this.appIds = KSync3Utils.split(sAppIds);
+        this.appIds = appIds;
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         File localDataDir = new File(tmpDir, "appDeployer");
@@ -275,14 +249,6 @@ public class AppDeployer {
             fileSystemWatchingService = null;
         }
         fileHashCache = new BerkeleyDbFileHashCache(envDir);
-    }
-
-    public boolean isAutoIncrement() {
-        return autoIncrement;
-    }
-
-    public void setAutoIncrement(boolean autoIncrement) {
-        this.autoIncrement = autoIncrement;
     }
 
     public void upsync() throws IOException {
@@ -419,14 +385,6 @@ public class AppDeployer {
                     if (!publishApp(appName, appProperties.getClusters())) {
                         results.errors.add(appName + "Pushed, but could not (re)publish app to marketplace " + appPath);
                         return;
-                    }
-
-                    if (autoIncrement) {
-                        if (report) {
-                            log.debug("Would have auto-incremented " + appDir);
-                        } else {
-                            incrementVersionNumber(appDir, versionName);
-                        }
                     }
 
                     results.infos.add(appName + " - Published " + appName + " version " + versionName + " with hash " + localHash);

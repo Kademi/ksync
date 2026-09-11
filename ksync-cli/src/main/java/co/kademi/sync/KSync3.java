@@ -1,6 +1,5 @@
 package co.kademi.sync;
 
-import co.kademi.deploy.AppDeployer;
 import co.kademi.sync.status.SyncState;
 import co.kademi.sync.status.SyncStatusReporter;
 import co.kademi.sync.status.TrayStatusIcon;
@@ -14,6 +13,17 @@ import io.milton.http.exceptions.NotFoundException;
 import io.milton.http.values.Pair;
 import io.milton.httpclient.Host;
 import io.milton.sync.ConflictResolvers;
+import co.kademi.sync.commands.BaseCommand;
+import co.kademi.sync.commands.CheckoutCommand;
+import co.kademi.sync.commands.ConflictOptions;
+import co.kademi.sync.commands.IgnoreCommand;
+import co.kademi.sync.commands.LoginCommand;
+import co.kademi.sync.commands.LogoutCommand;
+import co.kademi.sync.commands.PullCommand;
+import co.kademi.sync.commands.PushCommand;
+import co.kademi.sync.commands.SyncCommand;
+import co.kademi.sync.commands.VerifyCommand;
+import co.kademi.sync.oauth.CredentialStore;
 import co.kademi.sync.oauth.NotLoggedInException;
 import co.kademi.sync.oauth.OAuth2Client;
 import io.milton.httpclient.HttpException;
@@ -40,7 +50,6 @@ import java.net.URL;
 import java.nio.file.FileSystems;
 import java.nio.file.Paths;
 import java.nio.file.WatchService;
-import java.util.Properties;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -60,11 +69,6 @@ import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Options;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.Header;
@@ -103,153 +107,77 @@ public class KSync3 {
 
     private static final Logger log = LoggerFactory.getLogger(KSync3.class);
 
-    /** How conflicts are asked about, from -conflictmode. */
+    /**
+     * How conflicts are asked about, from -conflictmode.
+     */
     private static ConflictResolvers.Mode conflictMode = ConflictResolvers.Mode.AUTO;
 
     /**
      * Whether local is the authority, from -localwins.
      *
-     * Off by default, which is the careful reading: the remote may hold someone else's work, so a
-     * remote that has moved on stops a push and a conflict gets a question. Where the local
-     * checkout is version managed that reading is wrong - the remote differing is the normal state
-     * of things, and both interruptions are just noise in the way.
+     * Off by default, which is the careful reading: the remote may hold someone
+     * else's work, so a remote that has moved on stops a push and a conflict
+     * gets a question. Where the local checkout is version managed that reading
+     * is wrong - the remote differing is the normal state of things, and both
+     * interruptions are just noise in the way.
      */
     private static boolean localWins;
 
     /**
-     * Where to write the status JSON, from -statusfile. Null means the default inside .ksync.
+     * Where to write the status JSON, from -statusfile. Null means the default
+     * inside .ksync.
      *
      * Fully qualified because io.milton.common.Path is the Path in this file.
      */
     private static java.nio.file.Path statusFile;
 
-    /** Whether the status bar icon was turned off with -notray. */
+    /**
+     * Whether the status bar icon was turned off with -notray.
+     */
     private static boolean trayDisabled;
 
-    /** The command being run, which decides whether status is worth publishing at all. */
+    /**
+     * The command being run, which decides whether status is worth publishing
+     * at all.
+     */
     private static String commandName;
 
-    private static final List<Command> commands = new ArrayList<>();
-
-    static {
-        commands.add(new UsageCommand());
-        commands.add(new CheckoutCommand());
-        commands.add(new PushCommand());
-        commands.add(new PullCommand());
-        commands.add(new SyncCommand());
-        commands.add(new PublishCommand());
-        commands.add(new LoginCommand());
-        commands.add(new IgnoreCommand());
-        commands.add(new VerifyCommand());
-    }
-
     public static void main(String[] arg) {
-
-        // Check how many arguments were passed in
-        if (arg == null || arg.length == 0) {
-            log.error("No arguments given. Run ksync3 -command usage to see the options");
-            System.exit(0);
-        }
-
-        if (KSyncUri.isUri(arg)) {
+        if (arg != null && arg.length > 0 && KSyncUri.isUri(arg)) {
             log.debug("Found a ksync uri, parsing its arguments");
             arg = KSyncUri.parseArguments(arg);
         }
-
-        KSync3.handleKSync(arg);
-
+        System.exit(Cli.run(arg == null ? new String[0] : arg));
     }
 
-    private static void handleKSync(String[] arg) {
-        String commandsSt = "";
-        for (Command c : commands) {
-            commandsSt += c.getName() + ",";
-        }
-
-        Options options = new Options();
-        options.addOption("command", true, "One of " + commandsSt);
-        options.addOption("rootdir", true, "Root directory, which will contain folders 'apps', 'libs' and 'themes', each of which should contain the app folder to publish ");
-        options.addOption("url", true, "URL to use, for checkout and publish");
-        options.addOption("user", true, "username to use, for checkout and publish. Not your email address");
-        options.addOption("password", true, "password to login with, for checkout and publish. Not your email address. Will prompt if needed and not provided");
-        options.addOption("report", false, "Display report only, do not make changes (for publish command only)");
-        options.addOption("versionincrement", false, "Update version files (for publish command only)");
-        options.addOption("force", false, "Update already published apps (for publish command only)");
-        options.addOption("appids", true, "Which apps to publish. Asterisk to load all apps; or enter a comma seperated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib");
-        options.addOption("ignore", true, "Comma separated list of file/folder name patterns to ignore for this run, on top of the built in ones and ~/.ksyncignore. See -command ignore");
-        options.addOption("auth", true, "An encrypted token from the server which provides authentication");
-        options.addOption("appname", true, "app name for creating folder in app directory");
-        options.addOption("appdir", true, "defines whether ksync was executed from an URI schema or from terminal");
-        options.addOption("conflictmode", true, "How to ask about file conflicts: gui (a dialog, the default), console (a terminal prompt, for CI or an agent), or auto");
-        options.addOption("localwins", false, "Treat local as authoritative: overwrite the remote even when it has changed, and keep the local file on a conflict, without prompting. For a checkout that is version managed. Makes -conflictmode irrelevant, because nothing is asked");
-        options.addOption("debug", false, "Verbose output: show debug logging, with the level and source class on each line");
-        options.addOption("logformat", true, "Shape of each log line: plain (the message alone, the default), ts (an ISO-8601 UTC timestamp and level first) or kv (ts=.. level=.. msg=\"..\", for a log reader)");
-        options.addOption("oauth", false, "Use OAuth2 for the login command, instead of a username and password. Opens a browser to authorize");
-        options.addOption("logout", false, "Discard the stored OAuth2 tokens (for the login command)");
-        options.addOption("pattern", true, "File/folder name or glob to add to the global ignore file, eg *.log or node_modules. Comma seperated for several (for the ignore command). Lists the file when omitted");
-        options.addOption("statusfile", true, "Where to write the JSON status file that a status bar, editor or script can read. Defaults to .ksync/status.json inside the checkout");
-        options.addOption("notray", false, "Do not show the status icon in the OS status bar during the sync command. The status file is still written");
-        CommandLineParser parser = new DefaultParser();
-        CommandLine line;
+    /**
+     * Applies the options every command shares, before the command itself runs.
+     *
+     * These live in statics because the objects that read them are built deep
+     * inside a sync and have no route back to the command line.
+     *
+     * @param cmd
+     */
+    public static void configure(BaseCommand cmd) {
+        commandName = cmd.spec.name();
+        // Both of these reject an unknown value by name. That is a typo on the command line, not a
+        // fault worth a stack trace, so report it the way picocli reports a bad option.
         try {
-            // parse the command line arguments
-            line = parser.parse(options, arg);
-        } catch (Exception exp) {
-            // oops, something went wrong
-            log.error("Parsing failed.  Reason: " + exp.getMessage());
-            System.exit(1);
-            return;
-        }
-
-        localWins = KSync3Utils.getBooleanInput(line, "localwins");
-        trayDisabled = KSync3Utils.getBooleanInput(line, "notray");
-        String sStatusFile = line.getOptionValue("statusfile");
-        statusFile = StringUtils.isBlank(sStatusFile) ? null : Paths.get(sStatusFile.trim());
-
-        // Both of these reject an unknown value by name. That is a typo in the command line, not a
-        // fault worth a stack trace, so report it the same way a parse failure is reported.
-        try {
-            configureLogging(KSync3Utils.getBooleanInput(line, "debug"), line.getOptionValue("logformat"));
-            conflictMode = ConflictResolvers.parseMode(line.getOptionValue("conflictmode"));
+            configureLogging(cmd.global.debug, cmd.global.logformat);
+            ConflictOptions conflict = cmd.conflict();
+            if (conflict != null) {
+                localWins = conflict.localwins;
+                conflictMode = conflict.conflictmode;
+                statusFile = StringUtils.isBlank(conflict.statusfile) ? null : Paths.get(conflict.statusfile.trim());
+            }
         } catch (IllegalArgumentException ex) {
-            log.error(ex.getMessage());
-            System.exit(1);
-            return;
+            throw cmd.fail(ex.getMessage());
         }
-
-        Command cmd = KSync3Utils.findCommand(line, commands);
-
-        if (cmd == null) {
-            showUsage(options);
-            return;
-        }
-
-        commandName = cmd.getName();
+        trayDisabled = cmd.trayDisabled();
         if (wantsTray()) {
             // Before anything touches AWT, which the tray itself is about to do
             TrayStatusIcon.configureMacOsAccessoryMode();
         }
-
-        try {
-            cmd.execute(options, line);
-        } catch (Exception ex) {
-            NotLoggedInException notLoggedIn = NotLoggedInException.find(ex);
-            if (notLoggedIn != null) {
-                // nothing in the stack trace helps the person reading it; they just need to log in
-                log.error(notLoggedIn.getMessage());
-                System.exit(1);
-            }
-            SetupException setup = SetupException.find(ex);
-            if (setup != null) {
-                // likewise: the message says what to fix, the trace only buries it
-                log.error(setup.getMessage());
-                System.exit(1);
-            }
-            log.error("Exception running command {} - {}", cmd.getName(), ex.getMessage(), ex);
-            System.exit(1);
-        }
-
-        System.exit(0); // threads arent shutting down
     }
 
     private void showErrors() {
@@ -267,161 +195,11 @@ public class KSync3 {
     private final ExecutorService fileTransferExecutor = new ThreadPoolExecutor(20, 20, 60, TimeUnit.SECONDS, fileDownloadQueue);
     private final List<Future> fileDownloadFutures = new ArrayList<>();
 
-    public interface Command {
-
-        String getName();
-
-        void execute(Options options, CommandLine line) throws Exception;
-    }
-
-    public static class CheckoutCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "checkout";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            checkout(options, line);
-        }
-
-    }
-
-    public static class UsageCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "usage";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) {
-            showUsage(options);
-        }
-
-    }
-
-    public static class CommitCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "commit";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            commit(options, line);
-        }
-
-    }
-
-    public static class PullCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "pull";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            pull(options, line);
-        }
-
-    }
-
-    public static class PushCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "push";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            push(options, line);
-        }
-
-    }
-
-    public static class SyncCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "sync";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            sync(options, line);
-            boolean done = false;
-            while (!done) {
-                try {
-                    Thread.sleep(200);
-                } catch (InterruptedException interruptedException) {
-                    done = true;
-                }
-            }
-        }
-
-    }
-
-    public static class PublishCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "publish";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            AppDeployer.publish(options, line);
-        }
-    }
-
-    public static class LoginCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "login";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            login(options, line);
-        }
-    }
-
-    public static class IgnoreCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "ignore";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            ignore(options, line);
-        }
-    }
-
-    public static class VerifyCommand implements Command {
-
-        @Override
-        public String getName() {
-            return "verify";
-        }
-
-        @Override
-        public void execute(Options options, CommandLine line) throws Exception {
-            verify(options, line);
-        }
-    }
-
     /**
-     * Whether a failure means the server could not be reached, as against a server that answered
-     * with a refusal. Worth telling apart in a status bar: the first often clears on its own when
-     * the network comes back, the second needs someone to log in or fix a permission.
+     * Whether a failure means the server could not be reached, as against a
+     * server that answered with a refusal. Worth telling apart in a status bar:
+     * the first often clears on its own when the network comes back, the second
+     * needs someone to log in or fix a permission.
      */
     private static SyncState stateFor(Throwable ex) {
         Throwable t = ex;
@@ -439,8 +217,9 @@ public class KSync3 {
     }
 
     /**
-     * Which commands publish status: the ones that talk to the server and take long enough for
-     * the answer to matter. Login, usage, ignore and publish have nothing a status bar would show.
+     * Which commands publish status: the ones that talk to the server and take
+     * long enough for the answer to matter. Login, logout, ignore and publish
+     * have nothing a status bar would show.
      */
     private static boolean publishesStatus() {
         return "sync".equals(commandName) || "push".equals(commandName)
@@ -448,56 +227,55 @@ public class KSync3 {
     }
 
     /**
-     * Only sync earns a status bar icon. The others are over in a second or two, and an icon that
-     * appears and vanishes before it can be read is worse than none - it would also make every
-     * short command pay for starting AWT.
+     * Only sync earns a status bar icon. The others are over in a second or
+     * two, and an icon that appears and vanishes before it can be read is worse
+     * than none - it would also make every short command pay for starting AWT.
      */
     private static boolean wantsTray() {
         return "sync".equals(commandName) && !trayDisabled;
     }
 
     /**
-     * ISO-8601 in UTC. A log being read by another program should not shift when the machine
-     * writing it is in a different zone, or when it crosses a daylight saving boundary mid-sync.
+     * ISO-8601 in UTC. A log being read by another program should not shift
+     * when the machine writing it is in a different zone, or when it crosses a
+     * daylight saving boundary mid-sync.
      */
     private static final String TIMESTAMP = "%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z'}{UTC}";
 
     /**
-     * The log4j2 conversion pattern for a -logformat value, or null to leave the configured
-     * default (the message alone) in place.
+     * The log4j2 conversion pattern for a -logformat value, or null to leave
+     * the configured default (the message alone) in place.
      *
-     * kv quotes the message and escapes what is inside it, because a sync message can carry a file
-     * name with a quote in it and an unescaped one would end the field early.
+     * kv quotes the message and escapes what is inside it, because a sync
+     * message can carry a file name with a quote in it and an unescaped one
+     * would end the field early.
      */
-    private static String logPattern(String logFormat, boolean debug) {
-        if (StringUtils.isBlank(logFormat)) {
+    private static String logPattern(LogFormat logFormat, boolean debug) {
+        if (logFormat == null) {
             // -debug on its own still wants the level and source class, as it always has.
             return debug ? "%-5p %c - %m%n" : null;
         }
-        String f = logFormat.trim().toLowerCase(Locale.ROOT);
         // The source class earns its place once someone is diagnosing, whichever shape they chose.
         String source = debug ? " %c" : "";
-        switch (f) {
-            case "plain":
-                return debug ? "%-5p" + source + " - %m%n" : "%m%n";
-            case "ts":
+        switch (logFormat) {
+            case TS:
                 return TIMESTAMP + " %-5p" + source + " %m%n";
-            case "kv":
+            case KV:
                 return "ts=" + TIMESTAMP + " level=%p"
                         + (debug ? " source=%c" : "")
                         + " msg=\"%enc{%m}{JSON}\"%n";
             default:
-                throw new IllegalArgumentException("Unknown log format '" + logFormat
-                        + "'. Use one of: plain, ts, kv");
+                return debug ? "%-5p" + source + " - %m%n" : "%m%n";
         }
     }
 
     /**
-     * Normal runs print the message alone; the level and class name only help when something is
-     * being diagnosed, and they bury the lines a user actually wants. -debug brings both back and
-     * turns the level up, and -logformat asks for a shape a program can read.
+     * Normal runs print the message alone; the level and class name only help
+     * when something is being diagnosed, and they bury the lines a user
+     * actually wants. -debug brings both back and turns the level up, and
+     * -logformat asks for a shape a program can read.
      */
-    private static void configureLogging(boolean debug, String logFormat) {
+    private static void configureLogging(boolean debug, LogFormat logFormat) {
         String pattern = logPattern(logFormat, debug);
         if (pattern != null) {
             // log4j2 resolves ${sys:ksync.logPattern} when it builds the layout, which has already
@@ -515,48 +293,62 @@ public class KSync3 {
         }
     }
 
-    public static void showUsage(Options options) {
-        HelpFormatter formatter = new HelpFormatter();
-        formatter.printHelp("ksync3", options);
-    }
-
-    private static void login(Options options, CommandLine line) throws Exception {
+    public static void runLogin(LoginCommand cmd) throws Exception {
         log.info("Signing in..");
         KSyncUtils.withDir((File dir) -> {
             File repoDir = new File(dir, ".ksync");
             repoDir.mkdirs();
-            Properties props = KSyncUtils.readProps(repoDir);
-            String url = KSync3Utils.getInput(options, line, "url", props, true);
 
-            if (KSync3Utils.getBooleanInput(line, "logout")) {
-                KSyncUtils.newOAuth2Client(url).logout();
-                log.info("Logged out, stored credentials for this site discarded");
+            if (cmd.oauth()) {
+                KSyncUtils.writeProps(cmd.url, null, repoDir);
+                KSyncUtils.newOAuth2Client(cmd.url).login();
                 return;
             }
 
-            if (KSync3Utils.getBooleanInput(line, "oauth")) {
-                KSyncUtils.writeProps(url, null, repoDir);
-                KSyncUtils.newOAuth2Client(url).login();
-                return;
-            }
+            String user = KSync3Utils.resolve(cmd.user(), "user", KSyncUtils.USER_PROMPT);
+            String pwd = KSync3Utils.getPassword(cmd.password(), user, cmd.url);
 
-            String user = KSync3Utils.getInput(options, line, "user", props, true);
-            String pwd = KSync3Utils.getPassword(line, user, url);
-
-            KSync3 kSync3 = new KSync3(dir, url, user, pwd, repoDir, false, null, null);
+            KSync3 kSync3 = new KSync3(dir, cmd.url, user, pwd, repoDir, false, null, null);
             kSync3.login(null);
-        }, options, line);
+        }, cmd);
     }
 
     /**
      * Adds patterns to the global ignore file, or shows what is in it.
      *
-     * Unlike the other commands this one is not about any one checkout, so it does not need a
-     * directory, a url or a login.
+     * Unlike the other commands this one is not about any one checkout, so it
+     * does not need a directory, a url or a login.
      */
-    private static void ignore(Options options, CommandLine line) throws Exception {
+    /**
+     * Discards the credentials for a site: the OAuth2 tokens and the cookie
+     * login both, because they are two ways into the same account and leaving
+     * one behind is not a logout.
+     *
+     * @param cmd
+     * @throws java.lang.Exception
+     */
+    public static void logout(LogoutCommand cmd) throws Exception {
+        String site = KSyncUtils.siteUrl(cmd.url);
+        CredentialStore.Credentials creds = CredentialStore.defaultStore().get(site);
+        boolean hadLogin = creds != null && creds.hasLogin();
+
+        KSyncUtils.newOAuth2Client(site).logout();
+        KSyncUtils.clearLogin(site);
+
+        if (hadLogin) {
+            log.info("Logged out of {}", site);
+        } else {
+            log.info("No stored credentials for {}, so there was nothing to discard", site);
+        }
+        if (StringUtils.isNotBlank(System.getenv(OAuth2Client.TOKEN_ENV_VAR))) {
+            // Otherwise the next command still authenticates and the logout looks broken
+            log.info("{} is still set in this environment, and will still be used", OAuth2Client.TOKEN_ENV_VAR);
+        }
+    }
+
+    public static void ignore(IgnoreCommand cmd) throws Exception {
         GlobalIgnores ignores = GlobalIgnores.defaultIgnores();
-        List<String> toAdd = KSync3Utils.split(line.getOptionValue("pattern"));
+        List<String> toAdd = KSync3Utils.split(cmd.pattern);
 
         if (toAdd == null) {
             showIgnores(ignores);
@@ -569,75 +361,67 @@ public class KSync3 {
             }
             if (ignores.add(pattern)) {
                 log.info("Ignoring {}", pattern);
-            } else if (GlobalIgnores.isBuiltIn(pattern)) {
-                log.info("Already ignoring {}, it is built in and always applies", pattern);
             } else {
                 log.info("Already ignoring {}", pattern);
             }
         }
-        log.info("Global ignore file is {}", ignores.getPath());
+        log.info("Your ignore file is {}", ignores.getPath());
     }
 
     private static void showIgnores(GlobalIgnores ignores) {
-        // Shown first, and shown even when the file is empty. A pattern nobody can see is a
-        // pattern nobody can diagnose: the question these answer is "why did that not sync".
-        log.info("Always ignored, built in to ksync:");
-        for (String pattern : GlobalIgnores.BUILT_IN) {
+        // Shown first, and shown even when the file is empty. A pattern nobody can see is a pattern
+        // nobody can diagnose: the question these answer is "why did that not sync".
+        log.info("Ignored by default, before any file is read:");
+        for (String pattern : Ignores.BUILT_IN) {
             log.info("  {}", pattern);
         }
-        log.info("Names starting with a dot are skipped too, as is .ksync itself");
+        log.info("  {} is always excluded and cannot be re-included", Ignores.STATE_DIR);
+        log.info("Any of the defaults can be undone by a later rule, eg !node_modules");
 
         List<String> patterns = ignores.patterns();
         if (patterns.isEmpty()) {
-            log.info("No global ignore patterns yet. Add one with: ksync3 -command ignore -pattern \"*.log\"");
+            log.info("You have no ignore patterns yet. Add one with: ksync3 ignore --pattern \"*.log\"");
             log.info("They would be kept in {}", ignores.getPath());
-            return;
+        } else {
+            log.info("Your patterns, from {}:", ignores.getPath());
+            for (String pattern : patterns) {
+                log.info("  {}", pattern);
+            }
         }
-        log.info("Global ignore patterns, from {}:", ignores.getPath());
-        for (String pattern : patterns) {
-            log.info("  {}", pattern);
-        }
+        log.info("A checkout can carry its own {} too, which the whole team shares", Ignores.IGNORE_FILE);
     }
 
-    private static void checkout(Options options, CommandLine line) throws Exception {
+    public static void checkout(CheckoutCommand cmd) throws Exception {
         log.info("Checking out..");
 
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();
-        }, options, line, true, false);
+        }, cmd, false);
 
     }
 
-    private static void commit(Options options, CommandLine line) throws Exception {
-        KSyncUtils.withKSync((File configDir, KSync3 k) -> {
-            k.commit();
-            k.showErrors();
-        }, line, options, false);
-        System.exit(0); // threads arent shutting down
-    }
-
-    private static void push(Options options, CommandLine line) throws Exception {
+    public static void push(PushCommand cmd) throws Exception {
         log.info("Pushing local changes..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.debug("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
-        }, line, options, false);
+        }, cmd, false);
         System.exit(0); // threads arent shutting down
     }
 
-    private static void sync(Options options, CommandLine line) throws Exception {
+    public static void sync(SyncCommand cmd) throws Exception {
         log.info("Syncing..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             k.start();
             k.showErrors();
-        }, line, options, true);
+        }, cmd, true);
         log.info("Finished the initial scan");
 
     }
 
-    private static void pull(Options options, CommandLine line) throws Exception {
+    public static void pull(PullCommand cmd) throws Exception {
         log.info("Pulling changes from the server..");
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
@@ -646,23 +430,25 @@ public class KSync3 {
             } catch (IOException ex) {
                 log.error("ex", ex);
             }
-        }, line, options, false);
+        }, cmd, false);
         log.info("Done");
         System.exit(0); // threads arent shutting down
     }
 
     /**
-     * Asks the server which files in this version are missing objects, and reports them.
+     * Asks the server which files in this version are missing objects, and
+     * reports them.
      *
-     * Exits 1 when anything is missing, so a script or an assistant can act on the answer without
-     * reading the output. This reports a fault in the version, not a fault in the command, so it
-     * has to be distinguishable from a clean check.
+     * Exits 1 when anything is missing, so a script or an assistant can act on
+     * the answer without reading the output. This reports a fault in the
+     * version, not a fault in the command, so it has to be distinguishable from
+     * a clean check.
      */
-    private static void verify(Options options, CommandLine line) throws Exception {
+    public static void verify(VerifyCommand cmd) throws Exception {
         int[] missing = new int[]{0};
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             missing[0] = k.verify();
-        }, line, options, false);
+        }, cmd, false);
         System.exit(missing[0] > 0 ? 1 : 0);
     }
 
@@ -687,42 +473,51 @@ public class KSync3 {
     private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
     private final File repoDir;
     private final File configDir;
-    private final List<String> ignores;
+    private final Ignores ignores;
     private final SyncHashCache fileHashCache;
     private final FileSystemWatchingService fileSystemWatchingService;
     private final ScheduledExecutorService scheduledExecutorService;
 
     private final List<String> errors = new ArrayList<>();
 
-    /** The url of the version being synced, which is what every request here is relative to. */
+    /**
+     * The url of the version being synced, which is what every request here is
+     * relative to.
+     */
     private final String remoteAddress;
 
     /**
-     * The repository url this checkout follows, or null when it is pinned to one version.
+     * The repository url this checkout follows, or null when it is pinned to
+     * one version.
      *
-     * When set, remoteAddress was resolved from it on startup and is the latest version at that
-     * moment, rather than something a person chose once and has to maintain by hand.
+     * When set, remoteAddress was resolved from it on startup and is the latest
+     * version at that moment, rather than something a person chose once and has
+     * to maintain by hand.
      */
     private final String trackedRepoUrl;
 
-    /** The metadata read while resolving the version, or null when this checkout is pinned. */
+    /**
+     * The metadata read while resolving the version, or null when this checkout
+     * is pinned.
+     */
     private RepoMeta repoMeta;
 
     /**
-     * Publishes what this sync is doing to the status file and, for the sync command, the OS
-     * status bar. Never null - the commands with nothing to say get a reporter that goes nowhere.
+     * Publishes what this sync is doing to the status file and, for the sync
+     * command, the OS status bar. Never null - the commands with nothing to say
+     * get a reporter that goes nowhere.
      */
     private final SyncStatusReporter status;
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, Ignores ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
         this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, null);
     }
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, Ignores ignores, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException, IOException {
         this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, oauth, RepoMeta.Tracking.OFF);
     }
 
-    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, List<String> ignores, Map<String, String> cookies, OAuth2Client oauth, RepoMeta.Tracking tracking) throws MalformedURLException, IOException {
+    public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, Ignores ignores, Map<String, String> cookies, OAuth2Client oauth, RepoMeta.Tracking tracking) throws MalformedURLException, IOException {
         this.localDir = localDir;
         this.configDir = configDir;
         this.ignores = ignores;
@@ -810,7 +605,7 @@ public class KSync3 {
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         // Keyed on the repository when following one, not on the version. The cache is about local
-        // files, so it stays valid across a version change, and rebuilding it on every release
+        // files, so it stays valid across a version changssssssssssse, and rebuilding it on every release
         // would be a slow scan of the whole checkout for nothing.
         String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
         File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(cacheKey));
@@ -834,16 +629,19 @@ public class KSync3 {
     }
 
     /**
-     * Reports a background push that failed, and ends the sync when it can only fail again.
+     * Reports a background push that failed, and ends the sync when it can only
+     * fail again.
      *
-     * A sync is built to outlive a bad push: the server may be down, or a pull may be needed, and
-     * the next change is worth trying. An expired login is not like that. Nothing this process can
-     * do will renew it, so every later push fails identically, and a sync still running while
-     * saving nothing is worse than one that stopped - whoever is editing files has no reason to
+     * A sync is built to outlive a bad push: the server may be down, or a pull
+     * may be needed, and the next change is worth trying. An expired login is
+     * not like that. Nothing this process can do will renew it, so every later
+     * push fails identically, and a sync still running while saving nothing is
+     * worse than one that stopped - whoever is editing files has no reason to
      * suspect their work is going nowhere.
      *
-     * No stack trace for that one: it is understood, and the message names the single thing to do
-     * about it. This is the same treatment the one-shot commands get in {@link #handleKSync}.
+     * No stack trace for that one: it is understood, and the message names the
+     * single thing to do about it. This is the same treatment the one-shot
+     * commands get in {@link #handleKSync}.
      */
     private void pushFailed(Exception ex) {
         if (!reportPushFailure(status, ex)) {
@@ -874,11 +672,13 @@ public class KSync3 {
     }
 
     /**
-     * The repository url this checkout follows, or null when it is pinned to a version.
+     * The repository url this checkout follows, or null when it is pinned to a
+     * version.
      *
-     * A probe is optimistic: if the server cannot be reached to answer it, carry on with the url as
-     * given rather than failing here. Whatever the command does next will report the real problem,
-     * and it will report it better than a question about metadata would.
+     * A probe is optimistic: if the server cannot be reached to answer it,
+     * carry on with the url as given rather than failing here. Whatever the
+     * command does next will report the real problem, and it will report it
+     * better than a question about metadata would.
      */
     private String trackedRepoUrl(RepoMeta.Tracking tracking, String sRemoteAddress) throws IOException {
         if (tracking == RepoMeta.Tracking.OFF) {
@@ -904,8 +704,8 @@ public class KSync3 {
     }
 
     /**
-     * The url of the latest version of the tracked repository, reporting which version that is and
-     * whether it has moved since this checkout last ran.
+     * The url of the latest version of the tracked repository, reporting which
+     * version that is and whether it has moved since this checkout last ran.
      */
     private String latestVersionUrl(String repoUrl) {
         RepoMeta.Version latest = repoMeta.getLatestVersion();
@@ -937,8 +737,9 @@ public class KSync3 {
     }
 
     /**
-     * Signs in with the password this instance was built with, and stores the session cookie the
-     * server hands back so the next command does not need the password.
+     * Signs in with the password this instance was built with, and stores the
+     * session cookie the server hands back so the next command does not need
+     * the password.
      *
      * @param secondFactor a 2FA code, or null on the first attempt
      */
@@ -947,10 +748,11 @@ public class KSync3 {
     }
 
     /**
-     * @param mayAskFor2FA whether a second factor can be prompted for. True for the login
-     * command, where someone is waiting at a terminal for exactly this. False when saving a
-     * session on the way into another command: a sync run from cron or a desktop launcher has
-     * nobody to answer, and would sit on a stdin that never produces a line
+     * @param mayAskFor2FA whether a second factor can be prompted for. True for
+     * the login command, where someone is waiting at a terminal for exactly
+     * this. False when saving a session on the way into another command: a sync
+     * run from cron or a desktop launcher has nobody to answer, and would sit
+     * on a stdin that never produces a line
      */
     private void login(String secondFactor, boolean mayAskFor2FA) {
         log.debug("login");
@@ -977,7 +779,7 @@ public class KSync3 {
                 case 401:
                     if (!mayAskFor2FA) {
                         log.info("Could not save a session for {}: the server asked for a second factor."
-                                + " Run: ksync -command login", client.server);
+                                + " Run: ksync3 login", client.server);
                         break;
                     }
                     log.info("Authentication failed. Is 2FA required?");
@@ -1011,12 +813,13 @@ public class KSync3 {
     }
 
     /**
-     * Saves a session for the password this instance was built with, so the next command runs
-     * without asking for it.
+     * Saves a session for the password this instance was built with, so the
+     * next command runs without asking for it.
      *
-     * Only worth calling when a password was actually used. Failing is not the command's failure:
-     * the password in hand authenticates every request either way, so whatever was asked for goes
-     * ahead, and the only cost is being asked for the password again next time.
+     * Only worth calling when a password was actually used. Failing is not the
+     * command's failure: the password in hand authenticates every request
+     * either way, so whatever was asked for goes ahead, and the only cost is
+     * being asked for the password again next time.
      */
     void saveLogin() {
         log.debug("Trading the password for a session, so it is not needed next time");
@@ -1031,16 +834,17 @@ public class KSync3 {
     /**
      * Reads the milton auth cookie out of a login response.
      *
-     * Servers return these in two shapes - one Set-Cookie header per cookie, and every cookie on
-     * a single line - so this looks for the cookie by name anywhere in the value rather than
-     * expecting it in a particular place:
+     * Servers return these in two shapes - one Set-Cookie header per cookie,
+     * and every cookie on a single line - so this looks for the cookie by name
+     * anywhere in the value rather than expecting it in a particular place:
      *
      * <pre>
      * miltonUserUrl=b64L3VzZXJzL2JyYWQv; Path=/; Expires=Wed, 04-Sep-2019 23:59:47 GMT
      * miltonUserUrlHash="YYY-XXX-YYY-ZZZ-XXX:DDDD"; Path=/; Expires=Sat, 24-Aug-2019 02:29:54 GMT; HttpOnly
      * </pre>
      *
-     * @return the userUrlHash cookie value, or null when the response carries no such cookie
+     * @return the userUrlHash cookie value, or null when the response carries
+     * no such cookie
      */
     static String userUrlHashFrom(Map<String, String> headers) {
         if (headers == null) {
@@ -1265,10 +1069,12 @@ public class KSync3 {
     /**
      * Copies a file's fanouts and blobs from one pair of stores to another.
      *
-     * @param synchronous when true the writes happen on this thread. Writing to the remote is done on the transfer
-     * executor so uploads overlap, and the file fanout must not be set until they finish, which is what the wait below
-     * is for. Writing to the local stores is just disk IO - the expensive part, fetching from the source, has already
-     * happened on this thread - so queueing it buys nothing and the wait would cost a second per file.
+     * @param synchronous when true the writes happen on this thread. Writing to
+     * the remote is done on the transfer executor so uploads overlap, and the
+     * file fanout must not be set until they finish, which is what the wait
+     * below is for. Writing to the local stores is just disk IO - the expensive
+     * part, fetching from the source, has already happened on this thread - so
+     * queueing it buys nothing and the wait would cost a second per file.
      */
     private void combine(String filePath, String fileHash, HashStore destHashStore, BlobStore destBlobStore, HashStore sourceHashStore, BlobStore sourceBlobStore, boolean synchronous) throws InterruptedException {
         if (destHashStore.hasFile(fileHash)) {
@@ -1360,7 +1166,7 @@ public class KSync3 {
                 return;
             }
         }
-        pull(hash, this.localDir, ignores); // pull from local blobstore into local vfs
+        pull(hash, this.localDir, "", ignores); // pull from local blobstore into local vfs
         KSyncUtils.saveRemoteHash(configDir, hash);
         log.info("finished checkout");
         status.hashes(hash, hash);
@@ -1408,10 +1214,12 @@ public class KSync3 {
     }
 
     /**
-     * Runs the whole-branch missing object check on the server and reports what it finds.
+     * Runs the whole-branch missing object check on the server and reports what
+     * it finds.
      *
-     * The walk is the server's, because only the server knows what is in its stores. It is not
-     * cheap on a large branch, hence the line saying it has started.
+     * The walk is the server's, because only the server knows what is in its
+     * stores. It is not cheap on a large branch, hence the line saying it has
+     * started.
      *
      * @return the number of missing objects
      */
@@ -1459,10 +1267,10 @@ public class KSync3 {
      *
      * @param hash
      */
-    private void fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
+    private void fetch(Path filePath, String hash, Ignores ignores) throws InterruptedException {
         try {
             startFileDownloads();
-            _fetch(filePath, hash, ignores);
+            _fetch(filePath, "", hash, ignores);
             log.debug("Waiting for file downloads to finish.");
             while (!areDownloadsFinished()) {
                 Thread.sleep(500);
@@ -1473,7 +1281,11 @@ public class KSync3 {
         log.debug("fetch finished");
     }
 
-    private void _fetch(Path filePath, String hash, List<String> ignores) throws InterruptedException {
+    /**
+     * @param relPath where this directory sits below the branch root, which is what an ignore rule
+     * is matched against. Empty at the root.
+     */
+    private void _fetch(Path filePath, String relPath, String hash, Ignores ignores) throws InterruptedException {
         log.debug("fetch: {}", filePath);
         List<ITriplet> triplets;
         try {
@@ -1485,9 +1297,10 @@ public class KSync3 {
         }
         if (triplets != null) {
             for (ITriplet t : triplets) {
-                if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                String childPath = relPath.isEmpty() ? t.getName() : relPath + "/" + t.getName();
+                if (!ignores.ignored(childPath, t.getType().equals("d"))) {
                     if (t.getType().equals("d")) {
-                        _fetch(filePath.child(t.getName()), t.getHash(), ignores);
+                        _fetch(filePath.child(t.getName()), childPath, t.getHash(), ignores);
                     } else {
                         enqueueFileDownload(filePath.child(t.getName()), t.getHash());
                         //combineToLocal(filePath.child(t.getName()), t.getHash());
@@ -1547,7 +1360,7 @@ public class KSync3 {
         }
     }
 
-    private void pull(String hash, File dir, List<String> ignores) {
+    private void pull(String hash, File dir, String relPath, Ignores ignores) {
         log.debug("pull: " + dir.getAbsolutePath());
         if (hash == null) {
             log.debug("pull: hash is null, so nothing");
@@ -1564,11 +1377,12 @@ public class KSync3 {
         }
         if (triplets != null) {
             for (ITriplet t : triplets) {
-                if (!KSync3Utils.ignored(t.getName(), ignores)) {
+                String childPath = relPath.isEmpty() ? t.getName() : relPath + "/" + t.getName();
+                if (!ignores.ignored(childPath, t.getType().equals("d"))) {
                     if (t.getType().equals("d")) {
                         File dir2 = new File(dir, t.getName());
                         dir2.mkdirs();
-                        pull(t.getHash(), dir2, ignores);
+                        pull(t.getHash(), dir2, childPath, ignores);
                     } else {
                         Combiner c = new Combiner();
                         File dest = new File(dir, t.getName());
@@ -1591,12 +1405,18 @@ public class KSync3 {
         }
     }
 
-    /** @return the url of the version being synced, which is the resolved one when following a repository */
+    /**
+     * @return the url of the version being synced, which is the resolved one
+     * when following a repository
+     */
     public String getRemoteAddress() {
         return remoteAddress;
     }
 
-    /** @return the repository url being followed, or null when this checkout is pinned to a version */
+    /**
+     * @return the repository url being followed, or null when this checkout is
+     * pinned to a version
+     */
     public String getTrackedRepoUrl() {
         return trackedRepoUrl;
     }
@@ -1605,7 +1425,7 @@ public class KSync3 {
         return branchPath;
     }
 
-    public List<String> getIgnores() {
+    public Ignores getIgnores() {
         return ignores;
     }
 

@@ -1,7 +1,6 @@
 package io.milton.sync;
 
 import java.awt.GraphicsEnvironment;
-import java.util.Locale;
 import java.util.function.Function;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -10,14 +9,16 @@ import org.slf4j.LoggerFactory;
 /**
  * Picks the conflict resolver to use.
  *
- * A dialog is the default, because a conflict needs a decision and a prompt buried in scrolling
- * sync output is easy to miss. It is the wrong choice whenever nobody can click it, and that is
- * not the same question as whether a display exists: an agent driving ksync on a developer's
- * desktop has a perfectly good display and still cannot press a button. So the automatic choice
- * looks at who is running, not just at whether X is up.
+ * A dialog is the default, because a conflict needs a decision and a prompt
+ * buried in scrolling sync output is easy to miss. It is the wrong choice
+ * whenever nobody can click it, and that is not the same question as whether a
+ * display exists: an agent driving ksync on a developer's desktop has a
+ * perfectly good display and still cannot press a button. So the automatic
+ * choice looks at who is running, not just at whether X is up.
  *
- * All of that is about how to put the question. -localwins says there is no question: local is the
- * authority, so the local file is kept and the run carries on.
+ * All of that is about how to put the question. -localwins says there is no
+ * question: local is the authority, so the local file is kept and the run
+ * carries on.
  */
 public class ConflictResolvers {
 
@@ -30,22 +31,12 @@ public class ConflictResolvers {
     private ConflictResolvers() {
     }
 
-    public static Mode parseMode(String s) {
-        if (StringUtils.isBlank(s)) {
-            return Mode.AUTO;
-        }
-        try {
-            return Mode.valueOf(s.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Unknown conflict mode '" + s
-                    + "'. Use one of: auto, gui, console");
-        }
-    }
-
     /**
      * @param mode how to ask, from -conflictmode
-     * @param localWins when local is authoritative (-localwins), in which case there is nothing to
-     * ask about: the local file always wins, so no resolver puts a question to anyone
+     * @param localWins when local is authoritative (-localwins), in which case
+     * there is nothing to ask about: the local file always wins, so no resolver
+     * puts a question to anyone
+     * @return
      */
     public static ConflictResolver create(Mode mode, boolean localWins) {
         if (localWins) {
@@ -75,8 +66,9 @@ public class ConflictResolvers {
     }
 
     /**
-     * @return the reason a dialog would be wrong here, or null if a dialog is fine. Takes the
-     * environment and the display as arguments so it can be tested without either.
+     * @return the reason a dialog would be wrong here, or null if a dialog is
+     * fine. Takes the environment and the display as arguments so it can be
+     * tested without either.
      */
     static String whyNotGui(Function<String, String> env, boolean displayAvailable) {
         // An agent runs ksync on a normal desktop, display and all, but cannot click anything.
@@ -107,12 +99,14 @@ public class ConflictResolvers {
     /**
      * Whether a dialog can actually be put on a screen.
      *
-     * The check has to probe rather than infer. On linux the absence of DISPLAY is a reliable
-     * signal, but on macOS there is no such variable: a jvm reached over ssh looks identical to
-     * one on the desktop until it tries to talk to the window server, and
-     * GraphicsEnvironment.isHeadless() does not reliably say so beforehand. Asking for the screen
-     * devices forces that connection, so a mac with no window session answers honestly instead of
-     * throwing later, in the middle of a sync, from inside a dialog nobody can see.
+     * The check has to probe rather than infer. On linux the absence of DISPLAY
+     * is a reliable signal, but on macOS there is no such variable: a jvm
+     * reached over ssh looks identical to one on the desktop until it tries to
+     * talk to the window server, and GraphicsEnvironment.isHeadless() does not
+     * reliably say so beforehand. Asking for the screen devices forces that
+     * connection, so a mac with no window session answers honestly instead of
+     * throwing later, in the middle of a sync, from inside a dialog nobody can
+     * see.
      */
     private static boolean canShowDialog() {
         // read directly rather than trusting isHeadless(), which caches the property on first use
@@ -132,7 +126,10 @@ public class ConflictResolvers {
         }
     }
 
-    /** Treats an env var as set unless it says false or 0, matching how CI vars are used. */
+    /**
+     * Treats an env var as set unless it says false or 0, matching how CI vars
+     * are used.
+     */
     private static boolean isTrue(String v) {
         if (StringUtils.isBlank(v)) {
             return false;

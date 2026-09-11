@@ -1,5 +1,6 @@
 package io.milton.sync.triplets;
 
+import co.kademi.sync.Ignores;
 import io.milton.sync.Utils;
 import java.io.File;
 import java.io.IOException;
@@ -32,7 +33,7 @@ public class FileSystemWatchingService {
     private final WatchService watchService;
     private final ScheduledExecutorService scheduledExecutorService;
     private final Map<WatchNotificationListener, File> mapOfListeners;
-    private final Map<WatchNotificationListener, List<String>> mapOfIgnores;
+    private final Map<WatchNotificationListener, Ignores> mapOfIgnores;
     private ScheduledFuture<?> futureScan;
 
     public FileSystemWatchingService(WatchService watchService, ScheduledExecutorService scheduledExecutorService) {
@@ -84,7 +85,8 @@ public class FileSystemWatchingService {
                 File dir = entry.getValue();
                 if (f.getAbsolutePath().startsWith(dir.getAbsolutePath())) {
                     entry.getKey().onChange(kind, f);
-                    ignored |= Utils.ignored(f, mapOfIgnores.get(entry.getKey()));
+                    Ignores ig = mapOfIgnores.get(entry.getKey());
+                    ignored |= ig != null && ig.ignored(MemoryLocalTripletStore.relativePath(dir, f), f.isDirectory());
                 }
             }
 
@@ -120,17 +122,17 @@ public class FileSystemWatchingService {
      * which on linux exhausts the per user inotify limit and then the files that do matter
      * silently stop being watched. May be null.
      */
-    public List<WatchKey> watch(File dir, WatchNotificationListener listener, List<String> ignorePatterns) throws IOException {
+    public List<WatchKey> watch(File dir, WatchNotificationListener listener, Ignores ignorePatterns) throws IOException {
         mapOfListeners.put(listener, dir);
         mapOfIgnores.put(listener, ignorePatterns);
         List<WatchKey> watchKeys = new ArrayList<>();
-        initWatch(dir, watchKeys, ignorePatterns);
+        initWatch(dir, dir, watchKeys, ignorePatterns);
         return watchKeys;
     }
 
-    private void initWatch(File dir, List<WatchKey> watchKeys, List<String> ignorePatterns) throws IOException {
+    private void initWatch(File root, File dir, List<WatchKey> watchKeys, Ignores ignorePatterns) throws IOException {
         if (dir.isDirectory()) {
-            if (Utils.ignored(dir, ignorePatterns)) {
+            if (ignorePatterns.ignored(MemoryLocalTripletStore.relativePath(root, dir), true)) {
                 log.debug("Not watching ignored directory {}", dir);
                 return;
             }
@@ -141,7 +143,7 @@ public class FileSystemWatchingService {
             File[] list = dir.listFiles();
             if (list != null) {
                 for (File f : list) {
-                    initWatch(f, watchKeys, ignorePatterns);
+                    initWatch(root, f, watchKeys, ignorePatterns);
                 }
             }
         }

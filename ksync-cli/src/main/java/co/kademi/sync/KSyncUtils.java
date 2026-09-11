@@ -1,6 +1,8 @@
 package co.kademi.sync;
 
 import co.kademi.sync.oauth.CredentialStore;
+import co.kademi.sync.commands.BaseCommand;
+import co.kademi.sync.commands.ConnectedCommand;
 import co.kademi.sync.oauth.OAuth2Client;
 import java.io.File;
 import java.io.FileInputStream;
@@ -14,8 +16,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.function.Consumer;
 import net.sf.json.JSONArray;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,40 +28,43 @@ public class KSyncUtils {
 
     private static final Logger log = LoggerFactory.getLogger(KSyncUtils.class);
 
-    public static void withKsync(CheckedConsumer<KSync3> command, Options options, CommandLine line, boolean needsUrl, boolean background) throws Exception {
+    public static void withKsync(CheckedConsumer<KSync3> command, ConnectedCommand cmd, boolean background) throws Exception {
         KSyncUtils.withDir((File dir) -> {
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
             Properties props = KSyncUtils.readProps(configDir);
 
-            String url = requireUrl(givenUrl(options, line, props, needsUrl), dir, options, line);
+            // Already resolved: the command line first, then the checkout's own properties, where a
+            // repository url wins over the version it last settled on or the checkout would be
+            // pinned to that version forever.
+            String url = requireUrl(cmd.connection.url);
             RepoMeta.Tracking tracking = trackingFor(url, props);
             migrateLegacyCredentials(url, configDir);
 
-            String auth = line.getOptionValue("auth");
-            if (StringUtils.isNotBlank(auth)) {
-                if (auth.contains(",")) {
-                    String[] arr = auth.split(",");
-                    String userName = arr[0].trim();
-                    String token = arr[1].trim();
-                    String userUrl = "/users/" + userName;
-                    log.debug("Auth token provided in args: userUrl={}", userUrl);
-                    writeLoginProps(userUrl, token, url);
-                }
+            String authToken = cmd.connection.authToken();
+            if (StringUtils.isNotBlank(authToken) && authToken.contains(",")) {
+                String[] arr = authToken.split(",");
+                String userName = arr[0].trim();
+                String token = arr[1].trim();
+                String userUrl = "/users/" + userName;
+                log.debug("Auth token provided in args: userUrl={}", userUrl);
+                writeLoginProps(userUrl, token, url);
             }
             Map cookies = KSyncUtils.getCookies(url);
-            OAuth2Client oauth = oauth2SessionOrNull(url);
-            String user = KSync3Utils.getInput(options, line, "user", props, oauth == null && cookies.isEmpty());
+            OAuth2Client oauth = oauth2SessionOrNull(url, cmd.connection.apiKey);
+            // Not from the default value provider: --user lives in an exclusive group, and picocli
+            // never builds a group nothing matched, so a default has nowhere to land.
+            String givenUser = StringUtils.defaultIfBlank(cmd.connection.user(), props.getProperty("user"));
+            String user = KSync3Utils.resolve(givenUser, "user", USER_PROMPT, oauth == null && cookies.isEmpty());
             String pwd = null;
             if (oauth != null) {
                 log.debug("Using the stored OAuth2 session, so dont prompt for password");
             } else if (cookies.isEmpty()) {
-                pwd = KSync3Utils.getPassword(line, user, url);
+                pwd = KSync3Utils.getPassword(cmd.connection.password(), user, url);
             } else {
                 log.debug("We have a saved login, so dont prompt for password: User={}", cookies.get("miltonUserUrl"));
             }
-            String sIgnores = KSync3Utils.getInput(options, line, "ignore", props, false);
-            List<String> ignores = GlobalIgnores.combine(KSync3Utils.split(sIgnores));
+            Ignores ignores = Ignores.load(dir, KSync3Utils.split(cmd.connection.ignore));
 
             // Constructed before the properties are written, because when this checkout follows a
             // repository the url to record is the version it resolves to, not the one given here
@@ -74,34 +77,18 @@ public class KSyncUtils {
                 kSync3.saveLogin();
             }
             command.accept(kSync3);
-        }, options, line);
+        }, cmd);
     }
 
-    /**
-     * The url to work from, before it is known whether it names a repository or a version.
-     *
-     * A checkout which follows a repository has both in its properties - the repository, and the
-     * version most recently resolved from it - and the repository is the one to start from, or the
-     * version it settled on last time would pin it there forever.
-     */
-    private static String givenUrl(Options options, CommandLine line, Properties props, boolean needsUrl) {
-        String fromCommandLine = line.getOptionValue("url");
-        if (StringUtils.isNotBlank(fromCommandLine)) {
-            return fromCommandLine;
-        }
-        String repoUrl = props.getProperty("repoUrl");
-        if (StringUtils.isNotBlank(repoUrl)) {
-            return repoUrl;
-        }
-        return KSync3Utils.getInput(options, line, "url", props, needsUrl);
-    }
+    public static final String USER_PROMPT = "username to log in with, not your email address";
 
     /**
-     * Whether the server has to be asked which version this checkout belongs on.
+     * Whether the server has to be asked which version this checkout belongs
+     * on.
      *
-     * A checkout already pointed at a version it has used before asks nothing, so the common case
-     * costs no request. Anything new or changed is worth one question, and the answer is recorded
-     * so it is only asked once.
+     * A checkout already pointed at a version it has used before asks nothing,
+     * so the common case costs no request. Anything new or changed is worth one
+     * question, and the answer is recorded so it is only asked once.
      */
     static RepoMeta.Tracking trackingFor(String url, Properties props) {
         if (url.equals(props.getProperty("repoUrl"))) {
@@ -114,25 +101,17 @@ public class KSyncUtils {
     }
 
     /**
-     * The url of the remote branch this directory syncs with. Every command needs one: without it
-     * there is nothing to talk to, and the failure surfaced as a MalformedURLException from deep
-     * inside the KSync3 constructor, which says nothing about what to do next.
+     * Checks the url is one the rest of the code can use.
      *
-     * A directory with no ksync.properties is not a checkout yet, so ask for the url when there is
-     * someone at a terminal to answer. A background sync has nobody to ask, so tell it plainly
-     * rather than blocking forever on a stdin that will never produce a line.
+     * Whether there is a url at all is settled before this: it is a required
+     * option, and picocli fills it from the checkout's properties file when
+     * there is one. What is left is the shape of it, which used to surface as a
+     * MalformedURLException from deep inside the KSync3 constructor, saying
+     * nothing about what to do next.
      */
-    static String requireUrl(String url, File dir, Options options, CommandLine line) {
+    static String requireUrl(String url) {
         if (StringUtils.isBlank(url)) {
-            if (System.console() == null) {
-                throw new SetupException(dir.getAbsolutePath() + " is not a ksync checkout, and there is no terminal to ask for the url."
-                        + " Run it again with -url https://your-site/repo/branch, or check the branch out here first");
-            }
-            log.info("{} is not a ksync checkout yet, so there is no url to sync with", dir.getAbsolutePath());
-            url = KSync3Utils.getInput(options, line, "url", null, true);
-            if (StringUtils.isBlank(url)) {
-                throw new SetupException("No url given, so there is nothing to sync with");
-            }
+            throw new SetupException("No url given, so there is nothing to sync with");
         }
         url = url.trim();
         try {
@@ -143,8 +122,8 @@ public class KSyncUtils {
         return url;
     }
 
-    public static void withDir(CheckedConsumer<File> s, Options options, CommandLine line) throws Exception {
-        String curDir = KSync3Utils.getOrCreateAppDirectory(line);
+    public static void withDir(CheckedConsumer<File> s, BaseCommand cmd) throws Exception {
+        String curDir = KSync3Utils.getOrCreateAppDirectory(cmd.global.appdir, cmd.global.appname);
         File dir = new File(curDir);
 
         if (!dir.exists()) {
@@ -158,10 +137,10 @@ public class KSyncUtils {
         }
     }
 
-    public static void withKSync(KSyncCommand c, CommandLine line, Options options, boolean backgroundSync) throws Exception {
+    public static void withKSync(KSyncCommand c, ConnectedCommand cmd, boolean backgroundSync) throws Exception {
         withKsync((KSync3 kSync3) -> {
             c.accept(kSync3.getConfigDir(), kSync3);
-        }, options, line, false, backgroundSync);
+        }, cmd, backgroundSync);
 //
 //        KSyncUtils.withDir((File dir) -> {
 //            File configDir = new File(dir, ".ksync");
@@ -205,29 +184,55 @@ public class KSyncUtils {
     }
 
     /**
-     * An OAuth2 client for a site. Credentials live in the per-user store, not in the repo, so
-     * a token is never sitting in a directory a git commit can reach.
+     * An OAuth2 client for a site. Credentials live in the per-user store, not
+     * in the repo, so a token is never sitting in a directory a git commit can
+     * reach.
      */
     public static OAuth2Client newOAuth2Client(String url) {
         return new OAuth2Client(baseUrlOf(url), CredentialStore.defaultStore());
     }
 
     /**
-     * @return an OAuth2 client if there is a stored session for this site, or a KSYNC_TOKEN in
-     * the environment; otherwise null, so the caller falls back to cookies or a password
+     * @return an OAuth2 client if there is a stored session for this site, or a
+     * KSYNC_TOKEN in the environment; otherwise null, so the caller falls back
+     * to cookies or a password
      */
     public static OAuth2Client oauth2SessionOrNull(String url) {
+        return oauth2SessionOrNull(url, null);
+    }
+
+    /**
+     * @param apiKey a KOAuth2 api key given with -token, which stands in for a
+     * stored session and is used exactly as given: no refresh, and nothing
+     * written to disk
+     */
+    public static OAuth2Client oauth2SessionOrNull(String url, String apiKey) {
         if (StringUtils.isBlank(url)) {
             return null;
         }
         OAuth2Client oauth = newOAuth2Client(url);
+        if (StringUtils.isNotBlank(apiKey)) {
+            oauth.useApiKey(apiKey);
+        }
         return oauth.hasSession() ? oauth : null;
     }
 
     /**
-     * The ksync url points at a branch within a repository, but the OAuth2 endpoints live at the
-     * root of the website, so strip the path off.
+     * The ksync url points at a branch within a repository, but the OAuth2
+     * endpoints live at the root of the website, so strip the path off.
      */
+    /**
+     * The site a credential belongs to, from whatever someone typed: acme.kademi.co, with a
+     * scheme, or a full branch url. Credentials are stored per host, so all three name one login.
+     */
+    public static String siteUrl(String urlOrDomain) {
+        String s = StringUtils.trimToEmpty(urlOrDomain);
+        if (!s.contains("://")) {
+            s = "https://" + s;
+        }
+        return baseUrlOf(s);
+    }
+
     static String baseUrlOf(String url) {
         try {
             java.net.URL u = new java.net.URL(url);
@@ -242,8 +247,8 @@ public class KSyncUtils {
     }
 
     /**
-     * The cookie login for a site, as milton cookie names, or an empty map if there is none.
-     * Reads the per-user credential store, not the checkout.
+     * The cookie login for a site, as milton cookie names, or an empty map if
+     * there is none. Reads the per-user credential store, not the checkout.
      */
     public static Map<String, String> getCookies(String url) {
         Map<String, String> map = new HashMap<>();
@@ -267,11 +272,12 @@ public class KSyncUtils {
     }
 
     /**
-     * Moves a cookie login left behind by an older ksync out of the checkout and into the
-     * per-user store, then strips it from ksync.properties so the secret stops sitting
-     * somewhere a git commit can reach.
+     * Moves a cookie login left behind by an older ksync out of the checkout
+     * and into the per-user store, then strips it from ksync.properties so the
+     * secret stops sitting somewhere a git commit can reach.
      *
-     * Existing credentials for the host win, so re-running this cannot clobber a fresher login.
+     * Existing credentials for the host win, so re-running this cannot clobber
+     * a fresher login.
      */
     public static void migrateLegacyCredentials(String url, File repoDir) {
         Properties props = readProps(repoDir);
@@ -313,8 +319,8 @@ public class KSyncUtils {
     }
 
     /**
-     * Records the url and user. Leaves any repository being followed alone - use the overload
-     * taking a repoUrl to change that.
+     * Records the url and user. Leaves any repository being followed alone -
+     * use the overload taking a repoUrl to change that.
      */
     public static void writeProps(String url, String user, File repoDir) {
         writeProps(url, user, readProps(repoDir).getProperty("repoUrl"), repoDir);
@@ -324,8 +330,9 @@ public class KSyncUtils {
      * Records the url and user, and the repository this checkout follows.
      *
      * @param url the version url being synced
-     * @param repoUrl the repository whose latest version that is, or null if the checkout is
-     * pinned to the version, which stops it following anything it followed before
+     * @param repoUrl the repository whose latest version that is, or null if
+     * the checkout is pinned to the version, which stops it following anything
+     * it followed before
      */
     public static void writeProps(String url, String user, String repoUrl, File repoDir) {
         Properties props = readProps(repoDir);
@@ -373,7 +380,9 @@ public class KSyncUtils {
         }
     }
 
-    /** Records a cookie login for a site in the per-user credential store. */
+    /**
+     * Records a cookie login for a site in the per-user credential store.
+     */
     public static void writeLoginProps(String userUrl, String userUrlHash, String url) {
         try {
             CredentialStore store = CredentialStore.defaultStore();
@@ -388,7 +397,9 @@ public class KSyncUtils {
         }
     }
 
-    /** Forgets the cookie login for a site, without touching any OAuth2 session. */
+    /**
+     * Forgets the cookie login for a site, without touching any OAuth2 session.
+     */
     public static void clearLogin(String url) {
         try {
             CredentialStore store = CredentialStore.defaultStore();

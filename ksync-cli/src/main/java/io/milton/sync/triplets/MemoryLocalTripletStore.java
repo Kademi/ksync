@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import org.hashsplit4j.api.BlobStore;
 import org.hashsplit4j.api.Parser;
 import io.milton.event.EventManager;
+import co.kademi.sync.Ignores;
 import io.milton.sync.Utils;
 import io.milton.sync.event.EventUtils;
 import io.milton.sync.event.FileChangedEvent;
@@ -37,7 +38,7 @@ public class MemoryLocalTripletStore {
     private final HashStore hashStore;
     private final RepoChangedCallback callback;
     private final Consumer<Runnable> filter;
-    private final List<String> ignorePatterns;
+    private final Ignores ignorePatterns;
 
     private boolean initialScanDone;
 
@@ -53,14 +54,15 @@ public class MemoryLocalTripletStore {
 //        this(root, null, blobStore, hashStore, null, null, null, null, null);
 //    }
     public MemoryLocalTripletStore(File root, EventManager eventManager, BlobStore blobStore, HashStore hashStore, RepoChangedCallback callback,
-            Consumer<Runnable> filter, FileSystemWatchingService fileSystemWatchingService, List<String> ignorePatterns, SyncHashCache fileHashCache) throws IOException {
+            Consumer<Runnable> filter, FileSystemWatchingService fileSystemWatchingService, Ignores ignorePatterns, SyncHashCache fileHashCache) throws IOException {
         this.root = root;
         this.blobStore = blobStore;
         this.hashStore = hashStore;
         this.callback = callback;
         this.eventManager = eventManager;
         this.filter = filter;
-        this.ignorePatterns = ignorePatterns;
+        // Never null downstream: a caller that has nothing to exclude still gets the state dir excluded
+        this.ignorePatterns = ignorePatterns == null ? Ignores.none() : ignorePatterns;
         this.fileHashCache = fileHashCache;
         this.fileSystemWatchingService = fileSystemWatchingService;
         if (this.fileSystemWatchingService == null) {
@@ -216,7 +218,7 @@ public class MemoryLocalTripletStore {
     }
 
     public String scanDirectory(File dir) throws IOException {
-        if (Utils.ignored(dir, ignorePatterns)) {
+        if (ignored(dir)) {
             return null;
         }
 
@@ -233,7 +235,7 @@ public class MemoryLocalTripletStore {
         List<ITriplet> triplets = new ArrayList<>();
         if (children != null) {
             for (File child : children) {
-                if (Utils.ignored(child, ignorePatterns)) {
+                if (ignored(child)) {
                     continue;
                 }
                 Triplet t = new Triplet();
@@ -461,8 +463,22 @@ public class MemoryLocalTripletStore {
         return root;
     }
 
+    /**
+     * Whether a file under this root is excluded. Gitignore patterns are matched against the path
+     * relative to the root, so a bare name is not enough to answer with.
+     */
     public boolean ignored(File childFile) {
-        return Utils.ignored(childFile, ignorePatterns);
+        return ignorePatterns.ignored(relativePath(root, childFile), childFile.isDirectory());
+    }
+
+    /** The path from a scan root to a file, slash separated, as the ignore rules expect it. */
+    static String relativePath(File root, File file) {
+        String rootPath = root.getAbsolutePath();
+        String filePath = file.getAbsolutePath();
+        if (!filePath.startsWith(rootPath)) {
+            return file.getName();
+        }
+        return filePath.substring(rootPath.length()).replace(java.io.File.separatorChar, '/');
     }
 
     public interface RepoChangedCallback {

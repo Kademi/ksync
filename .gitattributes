@@ -2,13 +2,10 @@
 *.cmd -text
 
 # Line endings by what runs the file, not by what the machine checking it out prefers.
-# cmd.exe is the reason: a .bat with bare newlines can run its lines together around labels and
-# goto, and the failure looks like a script bug rather than an encoding one. install.sh has the
-# mirror of that problem, being piped straight into bash from a raw url, where a CR would come
-# through as part of every line.
-*.bat text eol=crlf
+# install.sh is piped straight into bash from a raw url, where a CR would come through as part of
+# every line.
 *.ps1 text eol=crlf
 *.sh text eol=lf
 
-# The jar the wrapper scripts run, committed so a clone is usable without a build
+# The built tool, committed so a clone is usable without a build
 *.jar binary

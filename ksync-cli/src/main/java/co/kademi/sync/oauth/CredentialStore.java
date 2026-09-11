@@ -187,7 +187,7 @@ public class CredentialStore {
     }
 
     /** Mirrors Go's os.UserConfigDir, so both clients land on the same file. */
-    static Path userConfigDir() {
+    public static Path userConfigDir() {
         String os = System.getProperty("os.name", "").toLowerCase();
         if (os.contains("win")) {
             String appData = System.getenv("AppData");
@@ -249,6 +249,16 @@ public class CredentialStore {
          */
         public String userUrl;
         public String userUrlHash;
+
+        /**
+         * @return true if someone is signed in here, by either route. Distinct from
+         * {@link #isEmpty()}, which also counts this install's client registration: that survives
+         * a logout, so the next login does not have to register all over again.
+         */
+        public boolean hasLogin() {
+            return StringUtils.isNotBlank(accessToken) || StringUtils.isNotBlank(refreshToken)
+                    || StringUtils.isNotBlank(userUrl) || StringUtils.isNotBlank(userUrlHash);
+        }
 
         /** @return true if there is nothing left worth storing for this host */
         boolean isEmpty() {

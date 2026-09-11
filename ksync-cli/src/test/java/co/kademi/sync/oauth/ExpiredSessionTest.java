@@ -79,7 +79,7 @@ public class ExpiredSessionTest {
             fail("expected NotLoggedInException");
         } catch (NotLoggedInException ex) {
             assertTrue(ex.getMessage(), ex.getMessage().contains("Not logged in"));
-            assertTrue(ex.getMessage(), ex.getMessage().contains("login -oauth"));
+            assertTrue(ex.getMessage(), ex.getMessage().contains("login --oauth"));
         }
     }
 
@@ -116,7 +116,7 @@ public class ExpiredSessionTest {
             fail("expected NotLoggedInException");
         } catch (NotLoggedInException ex) {
             assertTrue(ex.getMessage(), ex.getMessage().contains("expired and could not be renewed"));
-            assertTrue(ex.getMessage(), ex.getMessage().contains("login -oauth"));
+            assertTrue(ex.getMessage(), ex.getMessage().contains("login --oauth"));
             assertTrue(ex.getMessage(), ex.getMessage().contains("invalid_grant"));
         }
 

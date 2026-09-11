@@ -1,6 +1,5 @@
 package co.kademi.sync.oauth;
 
-import com.nimbusds.oauth2.sdk.AuthorizationCode;
 import com.nimbusds.oauth2.sdk.AuthorizationCodeGrant;
 import com.nimbusds.oauth2.sdk.AuthorizationErrorResponse;
 import com.nimbusds.oauth2.sdk.AuthorizationGrant;
@@ -45,16 +44,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * OAuth2.1 authorization code flow with PKCE against the KOAuth2 app on the server, using the
- * Nimbus oauth2-oidc-sdk for the protocol itself.
+ * OAuth2.1 authorization code flow with PKCE against the KOAuth2 app on the
+ * server, using the Nimbus oauth2-oidc-sdk for the protocol itself.
  *
- * The initial login is interactive: it needs a browser, because the server only offers the
- * authorization_code and refresh_token grants, so there is no headless way to mint a token.
- * After that the tokens live in the repo's ksync.properties and {@link #accessToken()} keeps
- * them fresh with no further user interaction.
+ * The initial login is interactive: it needs a browser, because the server only
+ * offers the authorization_code and refresh_token grants, so there is no
+ * headless way to mint a token. After that the tokens live in the repo's
+ * ksync.properties and {@link #accessToken()} keeps them fresh with no further
+ * user interaction.
  *
- * A client id can either be registered dynamically (RFC7591), which is what happens by default,
- * or configured up front with -clientid for servers where dynamic registration is turned off.
+ * A client id can either be registered dynamically (RFC7591), which is what
+ * happens by default, or configured up front with -clientid for servers where
+ * dynamic registration is turned off.
  */
 public class OAuth2Client {
 
@@ -70,17 +71,31 @@ public class OAuth2Client {
     private static final long REFRESH_LEEWAY_MILLIS = 60_000;
 
     /**
-     * Checked before the stored credentials, so CI can supply a KOAuth2 api key (ko2_ak_...)
-     * without a login and without writing anything to disk. Used exactly as given: no refresh,
-     * and nothing persisted. Matches ksync-go's KSYNC_TOKEN.
+     * Checked before the stored credentials, so CI can supply a KOAuth2 api key
+     * (ko2_ak_...) without a login and without writing anything to disk. Used
+     * exactly as given: no refresh, and nothing persisted. Matches ksync-go's
+     * KSYNC_TOKEN.
      */
     public static final String TOKEN_ENV_VAR = "KSYNC_TOKEN";
 
-    /** Replaced by tests to stand in for the user and their browser. */
+    /**
+     * Replaced by tests to stand in for the user and their browser.
+     */
     java.util.function.Consumer<String> browserLauncher = OAuth2Client::openBrowser;
 
-    /** Replaced by tests, which cannot set a real environment variable on a modern jvm. */
+    /**
+     * Replaced by tests, which cannot set a real environment variable on a
+     * modern jvm.
+     */
     java.util.function.Supplier<String> envTokenSource = () -> System.getenv(TOKEN_ENV_VAR);
+
+    /**
+     * Uses the given api key instead of anything stored, exactly as {@value #TOKEN_ENV_VAR} would
+     * be: no refresh, and nothing written to disk. This is what -token sets.
+     */
+    public void useApiKey(String apiKey) {
+        envTokenSource = () -> apiKey;
+    }
 
     private final String baseUrl;
     private final String host;
@@ -111,14 +126,16 @@ public class OAuth2Client {
         store.put(host, creds());
     }
 
-    /** An api key from the environment, or null. */
+    /**
+     * An api key from the environment, or null.
+     */
     String envToken() {
         return StringUtils.trimToNull(envTokenSource.get());
     }
 
     /**
-     * @return true if there is a stored session which can be used, or refreshed, without sending
-     * the user back to a browser
+     * @return true if there is a stored session which can be used, or
+     * refreshed, without sending the user back to a browser
      */
     public boolean hasSession() {
         if (envToken() != null) {
@@ -128,8 +145,9 @@ public class OAuth2Client {
     }
 
     /**
-     * The current access token, refreshed first if it has expired or is about to. Suitable to
-     * hand to {@link co.kademi.sync.BearerHost} as its token supplier.
+     * The current access token, refreshed first if it has expired or is about
+     * to. Suitable to hand to {@link co.kademi.sync.BearerHost} as its token
+     * supplier.
      */
     public synchronized String accessToken() {
         String fromEnv = envToken();
@@ -139,13 +157,13 @@ public class OAuth2Client {
         }
         CredentialStore.Credentials c = creds();
         if (StringUtils.isBlank(c.accessToken) && StringUtils.isBlank(c.refreshToken)) {
-            throw new NotLoggedInException("Not logged in to " + host + ". Run: ksync -command login -oauth"
+            throw new NotLoggedInException("Not logged in to " + host + ". Run: ksync3 login --oauth"
                     + ", or set " + TOKEN_ENV_VAR + " to an api key");
         }
         if (System.currentTimeMillis() > c.expiresAt - REFRESH_LEEWAY_MILLIS) {
             if (StringUtils.isBlank(c.refreshToken)) {
                 throw new NotLoggedInException("The token for " + host + " has expired and there is no refresh"
-                        + " token. Run: ksync -command login -oauth");
+                        + " token. Run: ksync3 login --oauth");
             }
             log.debug("Access token expired or expiring, refreshing");
             refresh();
@@ -154,9 +172,10 @@ public class OAuth2Client {
     }
 
     /**
-     * Runs the interactive login: registers this ksync install as an OAuth2 client if it does not
-     * have an id already, opens a browser for the user to approve, and exchanges the resulting
-     * code for tokens. Blocks until the user finishes or {@value #BROWSER_TIMEOUT_SECS} seconds pass.
+     * Runs the interactive login: registers this ksync install as an OAuth2
+     * client if it does not have an id already, opens a browser for the user to
+     * approve, and exchanges the resulting code for tokens. Blocks until the
+     * user finishes or {@value #BROWSER_TIMEOUT_SECS} seconds pass.
      */
     public void login() throws IOException {
         AuthorizationServerMetadata metadata = discover();
@@ -204,7 +223,10 @@ public class OAuth2Client {
         }
     }
 
-    /** Discards the stored session. The client registration is kept, so a re-login skips it. */
+    /**
+     * Discards the stored session. The client registration is kept, so a
+     * re-login skips it.
+     */
     public void logout() throws IOException {
         CredentialStore.Credentials c = creds();
         c.accessToken = null;
@@ -215,10 +237,10 @@ public class OAuth2Client {
     }
 
     // --- flow steps ----------------------------------------------------------------------
-
     /**
-     * KOAuth2 serves its metadata from the website root while its issuer is {root}/_oauth2, so
-     * the well known path cannot be derived from the issuer the way Nimbus' resolve() does it.
+     * KOAuth2 serves its metadata from the website root while its issuer is
+     * {root}/_oauth2, so the well known path cannot be derived from the issuer
+     * the way Nimbus' resolve() does it.
      */
     private AuthorizationServerMetadata discover() throws IOException {
         HTTPRequest request = new HTTPRequest(HTTPRequest.Method.GET, URI.create(baseUrl + METADATA_PATH).toURL());
@@ -295,17 +317,20 @@ public class OAuth2Client {
                 }
             }
             throw new NotLoggedInException("The session for " + host + " has expired and could not be renewed ("
-                    + ex.getMessage() + "). Run: ksync -command login -oauth", ex);
+                    + ex.getMessage() + "). Run: ksync3 login --oauth", ex);
         } catch (IOException ex) {
             // Could not reach the server. The credentials may well be fine, so keep them and say
             // so, rather than sending the user off to log in again for a network blip.
             throw new RuntimeException("Could not reach " + host + " to renew the access token, so this"
                     + " may be temporary. The stored login has been kept; try again, and if it persists"
-                    + " run: ksync -command login -oauth", ex);
+                    + " run: ksync3 login --oauth", ex);
         }
     }
 
-    /** Forgets tokens the server will no longer accept, keeping the client registration. */
+    /**
+     * Forgets tokens the server will no longer accept, keeping the client
+     * registration.
+     */
     private void discardSession() {
         try {
             CredentialStore.Credentials c = creds();
@@ -350,7 +375,10 @@ public class OAuth2Client {
         saveCreds();
     }
 
-    /** An OAuth2 error response from the token endpoint, as opposed to a failure to reach it. */
+    /**
+     * An OAuth2 error response from the token endpoint, as opposed to a failure
+     * to reach it.
+     */
     static class TokenErrorException extends IOException {
 
         final String code;
@@ -363,9 +391,10 @@ public class OAuth2Client {
         }
 
         /**
-         * Whether this says the credentials are finished, as opposed to the server having a bad
-         * day. Only the grant and client errors mean that: a 5xx, or an error body we could not
-         * read, must never cost someone their login.
+         * Whether this says the credentials are finished, as opposed to the
+         * server having a bad day. Only the grant and client errors mean that:
+         * a 5xx, or an error body we could not read, must never cost someone
+         * their login.
          */
         boolean meansCredentialsAreDead() {
             return "invalid_grant".equalsIgnoreCase(code) || "invalid_client".equalsIgnoreCase(code);
@@ -373,11 +402,10 @@ public class OAuth2Client {
     }
 
     // --- the loopback listener -----------------------------------------------------------
-
     /**
-     * A one shot local HTTP listener for the authorization redirect. The server only permits
-     * https, localhost or 127.0.0.1 redirect uris, so loopback is the supported option for a
-     * command line client.
+     * A one shot local HTTP listener for the authorization redirect. The server
+     * only permits https, localhost or 127.0.0.1 redirect uris, so loopback is
+     * the supported option for a command line client.
      */
     static class Callback implements AutoCloseable {
 
@@ -422,7 +450,10 @@ public class OAuth2Client {
             return redirectUriFor(server);
         }
 
-        /** @return the full callback uri including its query, for AuthorizationResponse.parse */
+        /**
+         * @return the full callback uri including its query, for
+         * AuthorizationResponse.parse
+         */
         URI await() throws IOException {
             try {
                 URI uri = received.poll(BROWSER_TIMEOUT_SECS, TimeUnit.SECONDS);
