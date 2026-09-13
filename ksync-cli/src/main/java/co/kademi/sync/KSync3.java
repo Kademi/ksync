@@ -1242,13 +1242,27 @@ public class KSync3 {
         return missing.getObjects().size();
     }
 
+    /**
+     * A branch hash is hex and nothing else. Anything else means the url is not a branch, and the
+     * commonest way to get here is pasting the address of the admin page for a website, which
+     * answers with that page. Without this check the page itself became the hash and went into the
+     * next request's path, which came back as a 414 with the whole document quoted in the message.
+     */
+    private static final java.util.regex.Pattern HASH = java.util.regex.Pattern.compile("[0-9a-fA-F]{8,64}");
+
     private String getRemoteHash(String path) {
         try {
             byte[] resp = client.get(path + "/?type=hash");
             if (resp == null) {
                 return null;
             }
-            String s = new String(resp);
+            String s = new String(resp).trim();
+            if (!HASH.matcher(s).matches()) {
+                log.debug("Asked {} for a branch hash and got {} bytes of something else", path, s.length());
+                throw new SetupException(remoteAddress + " is not a repository branch: it answered with a page"
+                        + " rather than a version. A checkout url looks like"
+                        + " https://yoursite.kademi.co/repositories/<repository>/<version>/");
+            }
             return s;
         } catch (HttpException | NotAuthorizedException | BadRequestException | ConflictException | NotFoundException ex) {
             status.problem(stateFor(ex), "Could not read the remote hash: " + ex.getMessage());
