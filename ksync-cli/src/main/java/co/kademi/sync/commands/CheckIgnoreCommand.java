@@ -18,11 +18,9 @@ import picocli.CommandLine.Parameters;
  */
 @Command(name = "check-ignore",
         header = "Show which ignore rule excludes a path.",
-        description = {"Answers \"why is this file not syncing\" by naming the rule that decided it, the file that",
-            "rule came from, and the line number.",
+        description = {"Answers \"why is this file not syncing\" by naming the rule that decided it, the file that rule came from, and the line number.",
             "",
-            "A path that a rule put back is reported too and marked as re-included, because that is a",
-            "different answer from no rule having matched at all."},
+            "A path that a rule put back is reported too and marked as re-included, because that is a different answer from no rule having matched at all."},
         exitCodeListHeading = "%nExit codes:%n",
         exitCodeList = {"0:at least one path given is ignored", "1:none of them is",
             "2:a path was outside the checkout, or an option was wrong"})

@@ -45,15 +45,9 @@ public class Cli {
 
     @Command(name = "ksync3",
             header = "Syncs a local directory with a Kademi repository branch.",
-            description = {
-                "Keeps a folder on this machine and a branch of a Kademi repository in step, in both",
-                "directions. A checkout records the branch it belongs to in a .ksync folder, so after",
-                "the first run every command works out for itself where to talk to and who as.",
+            description = {"Keeps a folder on this machine and a branch of a Kademi repository in step, in both directions. A checkout records the branch it belongs to in a .ksync folder, so after the first run every command works out for itself where to talk to and who as.",
                 "",
-                "What a sync leaves out is decided by gitignore rules, in four layers, each able to",
-                "undo the one before it: the built in defaults, then ~/.config/ksync/ignore for this",
-                "machine, then a .ksyncignore in the checkout for the whole team, then --ignore for one",
-                "run. Ask check-ignore which of them applied to a file."},
+                "What a sync leaves out is decided by gitignore rules, in four layers, each able to undo the one before it: the built in defaults, then ~/.config/ksync/ignore for this machine, then a .ksyncignore in the checkout for the whole team, then --ignore for one run. Ask check-ignore which of them applied to a file."},
             footerHeading = "%nExamples:%n",
             footer = {
                 "  ksync3 checkout --url https://site.kademi.co/repositories/mysite/version1",

@@ -5,11 +5,9 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 @Command(name = "sync", header = "Watch for local changes and push each one as it happens.",
-        description = {"Runs until stopped, pushing each change as it is saved. This is the command to leave running",
-            "while you work.",
+        description = {"Runs until stopped, pushing each change as it is saved. This is the command to leave running while you work.",
             "",
-            "Progress is written to .ksync/status.json for an editor or status bar to read, and shown in the",
-            "OS status bar unless --notray."})
+            "Progress is written to .ksync/status.json for an editor or status bar to read, and shown in the OS status bar unless --notray."})
 public class SyncCommand extends SyncingCommand {
 
     @Option(names = {"--notray"},

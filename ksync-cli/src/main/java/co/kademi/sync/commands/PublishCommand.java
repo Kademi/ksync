@@ -6,8 +6,7 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 @Command(name = "publish", header = "Publish apps, libs or themes to the marketplace.",
-        description = {"Run from the folder that holds the apps, libs and themes directories, and name what to publish",
-            "with --appids. Each asset must have exactly one version folder inside it.",
+        description = {"Run from the folder that holds the apps, libs and themes directories, and name what to publish with --appids. Each asset must have exactly one version folder inside it.",
             "",
             "Not needed to use an app or lib within your own account, only to list it on the marketplace."})
 public class PublishCommand extends ConnectedCommand {

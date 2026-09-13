@@ -7,11 +7,9 @@ import picocli.CommandLine.Option;
 
 /** Creates a stored login, so unlike its siblings it takes no api key and no ignore patterns. */
 @Command(name = "login", header = "Sign in to a site and store the login for later runs.",
-        description = {"Credentials are stored per site, so every checkout of that site is signed in at once. With",
-            "--oauth a browser is opened to authorize; otherwise a username and password are used.",
+        description = {"Credentials are stored per site, so every checkout of that site is signed in at once. With --oauth a browser is opened to authorize; otherwise a username and password are used.",
             "",
-            "A KSYNC_TOKEN in the environment, or --token on the command line, is used instead of anything",
-            "stored here and needs no login at all."})
+            "A KSYNC_TOKEN in the environment, or --token on the command line, is used instead of anything stored here and needs no login at all."})
 public class LoginCommand extends BaseCommand {
 
     @Option(names = {"--url"}, required = true, paramLabel = "<url>",
