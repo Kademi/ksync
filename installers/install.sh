@@ -3,10 +3,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/Kademi/ksync/master/installers/install.sh | bash
 # Installs ksync3.jar, a JRE if no Java 11+ is found, and a `ksync3` launcher.
 # Run as a normal user for a per-user install, or with sudo for /usr/local.
-# Overrides: KSYNC3_HOME, KSYNC3_BIN, KSYNC3_JAR_URL, KSYNC3_JAVA_VERSION, KSYNC3_BUNDLE_JRE=1
+# Overrides: KSYNC3_HOME, KSYNC3_BIN, KSYNC3_VERSION, KSYNC3_JAR_URL, KSYNC3_JAVA_VERSION, KSYNC3_BUNDLE_JRE=1
 set -eu
 
-JAR_URL=${KSYNC3_JAR_URL:-https://docs.kademi.co/assets/fe0d6a30-5665-4dec-bdee-89f112c17905}
+# The latest release, or KSYNC3_VERSION with or without its leading v, as in 1.8.9 or v1.8.9.
+VERSION=${KSYNC3_VERSION:-latest}
+case "$VERSION" in
+  latest) BASE_URL=https://github.com/Kademi/ksync/releases/latest/download ;;
+  v*)     BASE_URL=https://github.com/Kademi/ksync/releases/download/$VERSION ;;
+  *)      BASE_URL=https://github.com/Kademi/ksync/releases/download/v$VERSION ;;
+esac
+JAR_URL=${KSYNC3_JAR_URL:-$BASE_URL/ksync3.jar}
 JAVA_MIN=11
 JAVA_VERSION=${KSYNC3_JAVA_VERSION:-25}
 
@@ -41,6 +48,21 @@ if command -v curl >/dev/null 2>&1; then fetch() { curl -fsSL "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then fetch() { wget -q -O "$2" "$1"; }
 else echo "curl or wget is required" >&2; exit 1; fi
 
+# The checksum comes from the same release as the jar, so it catches a truncated or
+# swapped download, not a compromised release. Exits rather than installing a jar
+# that does not match what the release says it is.
+verify_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$1" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$1" | cut -d' ' -f1)
+  else echo "Neither sha256sum nor shasum is available, skipping the checksum check" >&2; return 0; fi
+  if [ "$actual" != "$2" ]; then
+    echo "Checksum mismatch for $1" >&2
+    echo "  expected $2" >&2
+    echo "  got      $actual" >&2
+    exit 1
+  fi
+}
+
 # Prints the major version of the java binary given, or nothing if it does not run.
 java_major() {
   "$1" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.([0-9]+))?.*/\1 \3/p' | awk '{ print ($1 == 1) ? $2 : $1 }'
@@ -59,6 +81,15 @@ mkdir -p "$HOME_DIR" "$BIN_DIR"
 
 echo "Downloading ksync3.jar ..."
 fetch "$JAR_URL" "$HOME_DIR/ksync3.jar.tmp"
+# A KSYNC3_JAR_URL of your own has no SHA256SUMS to check it against
+if [ -z "${KSYNC3_JAR_URL:-}" ]; then
+  fetch "$BASE_URL/SHA256SUMS" "$HOME_DIR/SHA256SUMS.tmp"
+  EXPECTED=$(awk '$2 == "ksync3.jar" { print $1 }' "$HOME_DIR/SHA256SUMS.tmp")
+  rm -f "$HOME_DIR/SHA256SUMS.tmp"
+  [ -n "$EXPECTED" ] || { echo "SHA256SUMS in the release has no line for ksync3.jar" >&2; exit 1; }
+  verify_sha256 "$HOME_DIR/ksync3.jar.tmp" "$EXPECTED"
+  echo "Checksum verified"
+fi
 mv "$HOME_DIR/ksync3.jar.tmp" "$HOME_DIR/ksync3.jar"
 
 JAVA=$( [ "${KSYNC3_BUNDLE_JRE:-}" = 1 ] || find_java )

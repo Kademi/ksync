@@ -3,9 +3,20 @@ setlocal enabledelayedexpansion
 rem ksync3 installer for Windows CMD. Standalone, PowerShell is not needed.
 rem   curl -fsSL https://raw.githubusercontent.com/Kademi/ksync/master/installers/install.cmd -o install.cmd && install.cmd && del install.cmd
 rem Installs ksync3.jar and, if no Java 11+ is found, a JRE into %LOCALAPPDATA%\Programs\ksync3, and puts a ksync3 command on the user PATH.
-rem Overrides: KSYNC3_HOME, KSYNC3_JAR_URL, KSYNC3_JAVA_VERSION, KSYNC3_BUNDLE_JRE=1
+rem Overrides: KSYNC3_HOME, KSYNC3_VERSION, KSYNC3_JAR_URL, KSYNC3_JAVA_VERSION, KSYNC3_BUNDLE_JRE=1
 
-if not defined KSYNC3_JAR_URL set "KSYNC3_JAR_URL=https://docs.kademi.co/assets/fe0d6a30-5665-4dec-bdee-89f112c17905"
+rem The latest release, or KSYNC3_VERSION with or without its leading v, as in 1.8.9 or v1.8.9.
+if not defined KSYNC3_VERSION set "KSYNC3_VERSION=latest"
+set "BASE_URL=https://github.com/Kademi/ksync/releases/latest/download"
+if /i not "%KSYNC3_VERSION%"=="latest" (
+    set "REL=%KSYNC3_VERSION%"
+    if /i not "%KSYNC3_VERSION:~0,1%"=="v" set "REL=v%KSYNC3_VERSION%"
+    set "BASE_URL=https://github.com/Kademi/ksync/releases/download/!REL!"
+)
+rem A KSYNC3_JAR_URL of your own has no SHA256SUMS to check it against
+set "VERIFY=1"
+if defined KSYNC3_JAR_URL set "VERIFY="
+if not defined KSYNC3_JAR_URL set "KSYNC3_JAR_URL=!BASE_URL!/ksync3.jar"
 if not defined KSYNC3_HOME set "KSYNC3_HOME=%LOCALAPPDATA%\Programs\ksync3"
 set "BIN_DIR=%KSYNC3_HOME%\bin"
 set "JAVA_MIN=11"
@@ -31,7 +42,29 @@ curl --version >nul 2>&1 || (
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
 echo Downloading ksync3.jar ...
-call :download "%KSYNC3_JAR_URL%" "%KSYNC3_HOME%\ksync3.jar.tmp" || exit /b 1
+call :download "!KSYNC3_JAR_URL!" "%KSYNC3_HOME%\ksync3.jar.tmp" || exit /b 1
+
+rem The checksum comes from the same release as the jar, so it catches a truncated or
+rem swapped download, not a compromised release.
+if defined VERIFY (
+    call :download "!BASE_URL!/SHA256SUMS" "%KSYNC3_HOME%\sums.tmp" || exit /b 1
+    set "EXPECTED="
+    for /f "usebackq tokens=1,2" %%A in ("%KSYNC3_HOME%\sums.tmp") do if /i "%%B"=="ksync3.jar" set "EXPECTED=%%A"
+    del "%KSYNC3_HOME%\sums.tmp"
+    if not defined EXPECTED (
+        echo SHA256SUMS in the release has no line for ksync3.jar >&2
+        exit /b 1
+    )
+    call :sha256 "%KSYNC3_HOME%\ksync3.jar.tmp"
+    if /i not "!HASH!"=="!EXPECTED!" (
+        del "%KSYNC3_HOME%\ksync3.jar.tmp"
+        echo Checksum mismatch for ksync3.jar >&2
+        echo   expected !EXPECTED! >&2
+        echo   got      !HASH! >&2
+        exit /b 1
+    )
+    echo Checksum verified
+)
 move /y "%KSYNC3_HOME%\ksync3.jar.tmp" "%KSYNC3_HOME%\ksync3.jar" >nul
 
 set "JAVA="
@@ -92,6 +125,14 @@ echo Uninstall: run "%KSYNC3_HOME%\uninstall.cmd"
 exit /b 0
 
 rem ---------------------------------------------------------------- subroutines
+
+:sha256
+rem %1=file. Sets HASH from certutil, which prints the hash on the second line, and with
+rem spaces between the bytes on older Windows.
+set "HASH="
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "%~1" SHA256') do if not defined HASH set "HASH=%%H"
+set "HASH=!HASH: =!"
+exit /b 0
 
 :download
 rem %1=URL %2=output. Retries with best-effort revocation checking on networks that
