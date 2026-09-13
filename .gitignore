@@ -3,3 +3,7 @@
 /ksync-gui/build/
 /nbproject/
 /ksync-cli/.vscode/
+
+.ksync
+
+scratchpad/

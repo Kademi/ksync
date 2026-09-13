@@ -1,0 +1,96 @@
+# Builds the shaded jar from a tag and publishes it as a GitHub release, so the
+# installers can fetch a versioned artifact instead of one mutable asset.
+#
+# Tag with the pom version prefixed by v, e.g. v1.8.9, then push the tag. The
+# build fails if the jar does not report the version the tag claims.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release, e.g. v1.8.9'
+        required: true
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::826388764847:role/GithubOIDC-KSync-CodeArtifact
+          aws-region: us-east-1
+
+      - name: Fetch CodeArtifact Token
+        id: codeartifact
+        run: |
+          # Fetch the login token from CodeArtifact
+          echo "Generating AWS CodeArtifact auth token..."
+          AUTH_TOKEN=$(aws codeartifact get-authorization-token --region "$AWS_REGION" --domain "$CODEARTIFACT_DOMAIN" --domain-owner "$AWS_ACCOUNT_ID" --query 'authorizationToken' --output text)
+
+          if [ -z "$AUTH_TOKEN" ]; then
+            echo "Failed to generate AWS CodeArtifact auth token. Please ensure AWS CLI is installed and configured."
+            exit 1
+          fi
+
+          # Keep it out of the log: it is a live credential for the next 12 hours,
+          # and any maven step that echoes the server password would print it.
+          echo "::add-mask::$AUTH_TOKEN"
+
+          # Pass the variable on
+          echo "CODEARTIFACT_AUTH_TOKEN=$AUTH_TOKEN" >> "$GITHUB_ENV"
+        env:
+          AWS_ACCOUNT_ID: 826388764847
+          AWS_REGION: us-east-1
+          CODEARTIFACT_DOMAIN: kademi-repository
+          CODEARTIFACT_REPO: kademi-releases
+
+      - name: Build
+        run: mvn -s "$GITHUB_WORKSPACE/.github/maven_settings.xml" -U -B -f ksync-cli/pom.xml package
+
+      # The tag is what the installers will ask for by name, so a tag that does
+      # not match the jar hands users a download that lies about itself.
+      - name: Check the tag matches the jar
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          built=$(java -jar ksync-cli/target/ksync3.jar --version | awk '{print $3}')
+          if [ "$tag" != "v$built" ]; then
+            echo "Tag $tag does not match the version the jar reports, $built" >&2
+            exit 1
+          fi
+
+      # Bash only, and the script configures zsh itself when sourced there.
+      - name: Generate the completion script
+        run: |
+          set -euo pipefail
+          java -cp ksync-cli/target/ksync3.jar picocli.AutoComplete \
+            -n ksync3 -f 'co.kademi.sync.Cli$Root' -o ksync3_completion
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          mkdir -p release
+          cp ksync-cli/target/ksync3.jar ksync3_completion release/
+          (cd release && sha256sum ksync3.jar ksync3_completion > SHA256SUMS)
+          gh release create "$tag" release/* --title "$tag" --generate-notes
