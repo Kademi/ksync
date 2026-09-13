@@ -7,3 +7,5 @@
 .ksync
 
 scratchpad/
+# playwright mcp session output
+.playwright-mcp/

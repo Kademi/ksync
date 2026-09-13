@@ -425,10 +425,7 @@ public class OAuth2Client {
                 URI uri = URI.create(redirectUriFor(server) + queryOf(exchange.getRequestURI()));
                 received.offer(uri);
                 boolean ok = String.valueOf(uri.getRawQuery()).contains("code=");
-                byte[] page = (ok
-                        ? "<html><body><h3>ksync is now authorized.</h3><p>You can close this window.</p></body></html>"
-                        : "<html><body><h3>Authorization failed.</h3><p>Return to your terminal.</p></body></html>")
-                        .getBytes(StandardCharsets.UTF_8);
+                byte[] page = page(ok).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
                 exchange.sendResponseHeaders(200, page.length);
                 try (OutputStream out = exchange.getResponseBody()) {
@@ -436,6 +433,50 @@ public class OAuth2Client {
                 }
             });
             server.start();
+        }
+
+        /**
+         * The last thing someone sees of the sign in, so it is worth more than a bare h3. Single
+         * quoted attributes throughout, which html allows, so the markup needs no escaping here.
+         * Everything is inline: this is served by a one shot local server with nothing else on it.
+         */
+        private static String page(boolean ok) {
+            String tick = "M20 6L9 17l-5-5";
+            String cross = "M18 6L6 18M6 6l12 12";
+            return String.join("\n",
+                    "<!doctype html>",
+                    "<meta charset='utf-8'>",
+                    "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+                    "<title>ksync</title>",
+                    "<style>",
+                    ":root { color-scheme: light dark; --bg:#f4f6f5; --card:#fff; --line:#dde5e0;",
+                    "        --ink:#14181a; --soft:#4c5a55; --mark:#e2efe8; --accent:#14664a; }",
+                    "@media (prefers-color-scheme: dark) {",
+                    "  :root { --bg:#0e1211; --card:#161b19; --line:#252d2a;",
+                    "          --ink:#e7efea; --soft:#a3b1aa; --mark:#14261e; --accent:#6ed0a0; } }",
+                    "* { box-sizing:border-box }",
+                    "body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;",
+                    "  background:var(--bg); color:var(--ink);",
+                    "  font:16px/1.6 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;",
+                    "  -webkit-font-smoothing:antialiased }",
+                    ".card { background:var(--card); border:1px solid var(--line); border-radius:14px;",
+                    "  padding:40px 44px; max-width:400px; text-align:center }",
+                    ".mark { width:52px; height:52px; margin:0 auto 22px; border-radius:50%;",
+                    "  display:grid; place-items:center; background:var(--mark); color:var(--accent) }",
+                    "h1 { font-size:1.2rem; font-weight:600; margin:0 0 10px; letter-spacing:-0.01em }",
+                    "p { margin:0; color:var(--soft) }",
+                    "</style>",
+                    "<div class='card'>",
+                    "  <div class='mark'>",
+                    "    <svg width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='currentColor'",
+                    "         stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>",
+                    "      <path d='" + (ok ? tick : cross) + "'/>",
+                    "    </svg>",
+                    "  </div>",
+                    ok ? "  <h1>ksync is signed in</h1>" : "  <h1>Sign in failed</h1>",
+                    ok ? "  <p>You can close this window and go back to your terminal.</p>"
+                       : "  <p>Nothing was saved. Go back to your terminal to see why.</p>",
+                    "</div>");
         }
 
         private static String queryOf(URI requestUri) {

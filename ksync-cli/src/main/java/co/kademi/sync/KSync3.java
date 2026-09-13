@@ -296,11 +296,12 @@ public class KSync3 {
     public static void runLogin(LoginCommand cmd) throws Exception {
         log.info("Signing in..");
         KSyncUtils.withDir((File dir) -> {
+            // Signing in is about a site, not about this directory: the credentials go to the
+            // per-user store either way. Creating a .ksync here would leave what looks like a
+            // checkout in whatever folder someone happened to be standing in.
             File repoDir = new File(dir, ".ksync");
-            repoDir.mkdirs();
 
             if (cmd.oauth()) {
-                KSyncUtils.writeProps(cmd.url, null, repoDir);
                 KSyncUtils.newOAuth2Client(cmd.url).login();
                 return;
             }
