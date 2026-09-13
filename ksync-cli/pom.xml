@@ -169,7 +169,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>2.3</version>
+                <!-- 3.x, because 2.3 is from 2014 and its mojo descriptor cannot take
+                     manifestEntries under a current maven, which fails the release build
+                     rather than this one only because 2.3 was cached here years ago. -->
+                <version>3.6.0</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
