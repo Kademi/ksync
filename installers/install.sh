@@ -1,7 +1,7 @@
 #!/bin/sh
 # ksync3 installer for macOS, Linux and WSL. Needs curl or wget.
 #   curl -fsSL https://raw.githubusercontent.com/Kademi/ksync/master/installers/install.sh | bash
-# Installs ksync3.jar, a JRE if no Java 11+ is found, and a `ksync3` launcher.
+# Installs ksync3.jar, a JRE if no Java 11+ is found, a `ksync3` launcher, and tab completion.
 # Run as a normal user for a per-user install, or with sudo for /usr/local.
 # Overrides: KSYNC3_HOME, KSYNC3_BIN, KSYNC3_VERSION, KSYNC3_JAR_URL, KSYNC3_JAVA_VERSION, KSYNC3_BUNDLE_JRE=1
 set -eu
@@ -48,16 +48,21 @@ if command -v curl >/dev/null 2>&1; then fetch() { curl -fsSL "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then fetch() { wget -q -O "$2" "$1"; }
 else echo "curl or wget is required" >&2; exit 1; fi
 
-# The checksum comes from the same release as the jar, so it catches a truncated or
-# swapped download, not a compromised release. Exits rather than installing a jar
-# that does not match what the release says it is.
+# The checksum comes from the same release as the file, so it catches a truncated or
+# swapped download, not a compromised release. Exits rather than installing something
+# that does not match what the release says it is. $SUMS empty means there is nothing
+# to check against, which is the case for a KSYNC3_JAR_URL of your own.
 verify_sha256() {
+  [ -n "$SUMS" ] || return 0
+  expected=$(awk -v name="$2" '$2 == name { print $1 }' "$SUMS")
+  [ -n "$expected" ] || { echo "SHA256SUMS in the release has no line for $2" >&2; exit 1; }
   if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$1" | cut -d' ' -f1)
   elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$1" | cut -d' ' -f1)
   else echo "Neither sha256sum nor shasum is available, skipping the checksum check" >&2; return 0; fi
-  if [ "$actual" != "$2" ]; then
-    echo "Checksum mismatch for $1" >&2
-    echo "  expected $2" >&2
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$1"
+    echo "Checksum mismatch for $2" >&2
+    echo "  expected $expected" >&2
     echo "  got      $actual" >&2
     exit 1
   fi
@@ -79,18 +84,34 @@ find_java() {
 
 mkdir -p "$HOME_DIR" "$BIN_DIR"
 
+SUMS=""
+if [ -z "${KSYNC3_JAR_URL:-}" ]; then
+  SUMS=$HOME_DIR/SHA256SUMS.tmp
+  fetch "$BASE_URL/SHA256SUMS" "$SUMS"
+fi
+
 echo "Downloading ksync3.jar ..."
 fetch "$JAR_URL" "$HOME_DIR/ksync3.jar.tmp"
-# A KSYNC3_JAR_URL of your own has no SHA256SUMS to check it against
-if [ -z "${KSYNC3_JAR_URL:-}" ]; then
-  fetch "$BASE_URL/SHA256SUMS" "$HOME_DIR/SHA256SUMS.tmp"
-  EXPECTED=$(awk '$2 == "ksync3.jar" { print $1 }' "$HOME_DIR/SHA256SUMS.tmp")
-  rm -f "$HOME_DIR/SHA256SUMS.tmp"
-  [ -n "$EXPECTED" ] || { echo "SHA256SUMS in the release has no line for ksync3.jar" >&2; exit 1; }
-  verify_sha256 "$HOME_DIR/ksync3.jar.tmp" "$EXPECTED"
-  echo "Checksum verified"
-fi
+verify_sha256 "$HOME_DIR/ksync3.jar.tmp" ksync3.jar
 mv "$HOME_DIR/ksync3.jar.tmp" "$HOME_DIR/ksync3.jar"
+
+# Tab completion, from the release beside the jar it was generated from. picocli
+# generates bash, and the script sets zsh up itself when sourced there.
+COMPLETION=""
+case "${SHELL##*/}" in
+  bash|zsh)
+    if [ -n "$SUMS" ]; then
+      fetch "$BASE_URL/ksync3_completion" "$HOME_DIR/ksync3_completion.tmp"
+      verify_sha256 "$HOME_DIR/ksync3_completion.tmp" ksync3_completion
+      mv "$HOME_DIR/ksync3_completion.tmp" "$HOME_DIR/ksync3_completion"
+      COMPLETION=$HOME_DIR/ksync3_completion
+    fi
+    ;;
+esac
+if [ -n "$SUMS" ]; then
+  echo "Checksums verified"
+  rm -f "$SUMS"
+fi
 
 JAVA=$( [ "${KSYNC3_BUNDLE_JRE:-}" = 1 ] || find_java )
 if [ -n "$JAVA" ]; then
@@ -116,20 +137,40 @@ LAUNCHER
 chmod +x "$BIN_DIR/ksync3"
 
 echo "Installed ksync3 to $BIN_DIR/ksync3"
+
+# The login shell's startup file, for the PATH and completion lines below
+case "${SHELL##*/}" in
+  zsh)  PROFILE=$HOME/.zshrc ;;
+  fish) PROFILE=$HOME/.config/fish/config.fish ;;
+  bash) PROFILE=$HOME/.bashrc ;;
+  *)    PROFILE=$HOME/.profile ;;
+esac
+
+# Appends a line to the profile once, so running the installer again does not repeat it
+add_line() {
+  grep -qsF "$1" "$PROFILE" || printf '\n# ksync3\n%s\n' "$1" >> "$PROFILE"
+}
+
+mkdir -p "$(dirname "$PROFILE")"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
     # Put BIN_DIR on the PATH for the login shell. Ubuntu's default .profile does this itself
     # once ~/.local/bin exists, but macOS and most other distros do not.
-    case "${SHELL##*/}" in
-      zsh)  PROFILE=$HOME/.zshrc;  LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
-      fish) PROFILE=$HOME/.config/fish/config.fish; LINE="fish_add_path $BIN_DIR" ;;
-      bash) PROFILE=$HOME/.bashrc; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
-      *)    PROFILE=$HOME/.profile; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
-    esac
-    mkdir -p "$(dirname "$PROFILE")"
-    grep -qsF "$LINE" "$PROFILE" || printf '\n# ksync3\n%s\n' "$LINE" >> "$PROFILE"
+    if [ "${SHELL##*/}" = fish ]; then
+      add_line "fish_add_path $BIN_DIR"
+    else
+      add_line "export PATH=\"$BIN_DIR:\$PATH\""
+    fi
     echo "Added $BIN_DIR to your PATH in $PROFILE. Open a new terminal to pick it up."
     ;;
 esac
-echo "Uninstall: rm -rf \"$HOME_DIR\" \"$BIN_DIR/ksync3\""
+
+if [ -n "$COMPLETION" ]; then
+  # Guarded, so removing the install directory leaves a working shell behind
+  add_line "[ -f \"$COMPLETION\" ] && . \"$COMPLETION\""
+  echo "Added tab completion in $PROFILE"
+elif [ "${SHELL##*/}" != bash ] && [ "${SHELL##*/}" != zsh ]; then
+  echo "No tab completion for ${SHELL##*/}, picocli generates it for bash and zsh only"
+fi
+echo "Uninstall: rm -rf \"$HOME_DIR\" \"$BIN_DIR/ksync3\", and the ksync3 lines in $PROFILE"
