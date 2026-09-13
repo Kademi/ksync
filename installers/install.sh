@@ -16,6 +16,10 @@ esac
 JAR_URL=${KSYNC3_JAR_URL:-$BASE_URL/ksync3.jar}
 JAVA_MIN=11
 JAVA_VERSION=${KSYNC3_JAVA_VERSION:-25}
+# Which startup file to edit and whether completion is available. SHELL is unset in a
+# docker build, in cron and under some su, and this runs with set -u.
+LOGIN_SHELL=${SHELL:-/bin/sh}
+LOGIN_SHELL=${LOGIN_SHELL##*/}
 
 case "$(uname -s)" in
   Linux)  OS=linux ;;
@@ -98,7 +102,7 @@ mv "$HOME_DIR/ksync3.jar.tmp" "$HOME_DIR/ksync3.jar"
 # Tab completion, from the release beside the jar it was generated from. picocli
 # generates bash, and the script sets zsh up itself when sourced there.
 COMPLETION=""
-case "${SHELL##*/}" in
+case "$LOGIN_SHELL" in
   bash|zsh)
     if [ -n "$SUMS" ]; then
       fetch "$BASE_URL/ksync3_completion" "$HOME_DIR/ksync3_completion.tmp"
@@ -139,7 +143,7 @@ chmod +x "$BIN_DIR/ksync3"
 echo "Installed ksync3 to $BIN_DIR/ksync3"
 
 # The login shell's startup file, for the PATH and completion lines below
-case "${SHELL##*/}" in
+case "$LOGIN_SHELL" in
   zsh)  PROFILE=$HOME/.zshrc ;;
   fish) PROFILE=$HOME/.config/fish/config.fish ;;
   bash) PROFILE=$HOME/.bashrc ;;
@@ -157,7 +161,7 @@ case ":$PATH:" in
   *)
     # Put BIN_DIR on the PATH for the login shell. Ubuntu's default .profile does this itself
     # once ~/.local/bin exists, but macOS and most other distros do not.
-    if [ "${SHELL##*/}" = fish ]; then
+    if [ "$LOGIN_SHELL" = fish ]; then
       add_line "fish_add_path $BIN_DIR"
     else
       add_line "export PATH=\"$BIN_DIR:\$PATH\""
@@ -170,7 +174,7 @@ if [ -n "$COMPLETION" ]; then
   # Guarded, so removing the install directory leaves a working shell behind
   add_line "[ -f \"$COMPLETION\" ] && . \"$COMPLETION\""
   echo "Added tab completion in $PROFILE"
-elif [ "${SHELL##*/}" != bash ] && [ "${SHELL##*/}" != zsh ]; then
-  echo "No tab completion for ${SHELL##*/}, picocli generates it for bash and zsh only"
+elif [ "$LOGIN_SHELL" != bash ] && [ "$LOGIN_SHELL" != zsh ]; then
+  echo "No tab completion for $LOGIN_SHELL, picocli generates it for bash and zsh only"
 fi
 echo "Uninstall: rm -rf \"$HOME_DIR\" \"$BIN_DIR/ksync3\", and the ksync3 lines in $PROFILE"
