@@ -499,7 +499,10 @@ public class OAuth2Client {
             try {
                 URI uri = received.poll(BROWSER_TIMEOUT_SECS, TimeUnit.SECONDS);
                 if (uri == null) {
-                    throw new IOException("Timed out after " + BROWSER_TIMEOUT_SECS + "s waiting for authorization in the browser");
+                    // Nobody finished in the browser. That is a situation, not a fault, so it gets
+                    // the one line treatment rather than a stack trace through the option handling.
+                    throw new co.kademi.sync.SetupException("Gave up after " + BROWSER_TIMEOUT_SECS
+                            + " seconds waiting for the browser. Run the login again when you are ready to approve it.");
                 }
                 return uri;
             } catch (InterruptedException ex) {

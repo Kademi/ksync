@@ -521,7 +521,8 @@ public class KSync3 {
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, Ignores ignores, Map<String, String> cookies, OAuth2Client oauth, RepoMeta.Tracking tracking) throws MalformedURLException, IOException {
         this.localDir = localDir;
         this.configDir = configDir;
-        this.ignores = ignores;
+        // Never null: a fetch walks it for every child, and login builds one of these with none
+        this.ignores = ignores == null ? Ignores.none() : ignores;
         eventManager = new EventManagerImpl();
 
         int timeout = 180000;
@@ -1195,7 +1196,7 @@ public class KSync3 {
         }
         status.state(SyncState.PULLING, "fetching changes");
         try {
-            fetch(Path.root, remoteHash, null); // fetch into local blobstore
+            fetch(Path.root, remoteHash, ignores); // fetch into local blobstore
         } catch (InterruptedException ex) {
             log.error("interripted", ex);
             return null;

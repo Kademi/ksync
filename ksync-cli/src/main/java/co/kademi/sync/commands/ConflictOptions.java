@@ -13,7 +13,7 @@ public class ConflictOptions {
     public boolean localwins;
 
     @Option(names = {"-c", "--conflictmode"}, defaultValue = "AUTO",
-            description = "How to ask about file conflicts: gui (a dialog, the default), console (a terminal prompt, for CI or an agent), or auto")
+            description = "How to ask about file conflicts: auto (the default: a dialog when there is a desktop, a terminal prompt when there is not, which is what CI and an agent get), gui (always a dialog) or console (always a terminal prompt)")
     public ConflictResolvers.Mode conflictmode;
 
     @Option(names = {"-s", "--statusfile"}, paramLabel = "<file>",

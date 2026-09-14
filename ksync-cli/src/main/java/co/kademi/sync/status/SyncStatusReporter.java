@@ -23,6 +23,8 @@ public class SyncStatusReporter {
     private static final Logger log = LoggerFactory.getLogger(SyncStatusReporter.class);
 
     private final List<StatusSink> sinks;
+    /** Whether a desktop notification is wanted, which is the same question as whether a tray is */
+    private final boolean notify;
     private SyncStatus current;
     private boolean closed;
 
@@ -43,7 +45,7 @@ public class SyncStatusReporter {
             }
         }
         SyncStatusReporter reporter = new SyncStatusReporter(sinks,
-                SyncStatus.initial(command, localDir.getAbsolutePath(), url));
+                SyncStatus.initial(command, localDir.getAbsolutePath(), url), wantTray);
         reporter.publish();
         reporter.addShutdownHook();
         return reporter;
@@ -52,12 +54,13 @@ public class SyncStatusReporter {
     /** A reporter that publishes nowhere, so callers can be written without conditionals */
     public static SyncStatusReporter none() {
         return new SyncStatusReporter(Collections.emptyList(),
-                SyncStatus.initial(null, ".", null).withState(SyncState.STOPPED, null));
+                SyncStatus.initial(null, ".", null).withState(SyncState.STOPPED, null), false);
     }
 
-    private SyncStatusReporter(List<StatusSink> sinks, SyncStatus initial) {
+    private SyncStatusReporter(List<StatusSink> sinks, SyncStatus initial, boolean notify) {
         this.sinks = sinks;
         this.current = initial;
+        this.notify = notify;
     }
 
     /**
@@ -158,7 +161,10 @@ public class SyncStatusReporter {
                 log.debug("Sink {} could not alert", sink.getClass().getSimpleName(), ex);
             }
         }
-        if (Notifier.send(title, body, problem)) {
+        // Only a watching sync earns a desktop popup. A one shot command has somebody reading its
+        // output already, and a retry loop in CI or behind an agent would otherwise fire one per
+        // attempt at whoever's desktop the job happens to run on.
+        if (notify && Notifier.send(title, body, problem)) {
             return;
         }
         log.debug("Nowhere to show a notification: {} - {}", title, body);
