@@ -607,11 +607,23 @@ public class KSync3 {
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         // Keyed on the repository when following one, not on the version. The cache is about local
-        // files, so it stays valid across a version changssssssssssse, and rebuilding it on every release
+        // files, so it stays valid across a version change, and rebuilding it on every release
         // would be a slow scan of the whole checkout for nothing.
         String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
         File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(cacheKey));
-        fileHashCache = new BerkeleyDbFileHashCache(envDir);
+        try {
+            fileHashCache = new BerkeleyDbFileHashCache(envDir);
+        } catch (RuntimeException ex) {
+            // One writer at a time, and the raw failure names a path under /tmp without ever
+            // mentioning the other process holding it. Note the key is the repository when
+            // following one, so two checkouts of different versions of it collide here too.
+            if (ex.getClass().getSimpleName().contains("EnvironmentLocked")) {
+                throw new SetupException("Another ksync3 is already working on " + cacheKey
+                        + ". Stop it, usually a sync running in another terminal, and try again."
+                        + " Two checkouts of the same repository share this cache, so a sync in either blocks the other.", ex);
+            }
+            throw ex;
+        }
 
         tripletStore = new MemoryLocalTripletStore(localDir, eventManager, localBlobStore, localHashStore, (String rootHash) -> {
             if (background) {
