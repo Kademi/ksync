@@ -564,8 +564,20 @@ public class KSync3 {
         branchPath = new URL(remoteAddress).getFile();
 
         repoDir = new File(localDir, ".ksync");
-        this.localBlobStore = new FileSystem2BlobStore(new File(repoDir, "blobs"));
-        this.localHashStore = new FileSystem2HashStore(new File(repoDir, "hashes"));
+
+        // Keyed on the repository when following one, not on the version, so two checkouts of one
+        // repository share their objects instead of each fetching the same blob. The file hash
+        // cache below is keyed the same way, for the same reason.
+        String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
+
+        // Not under the checkout: both stores fan a hash out over nested directories, one small
+        // file per object, and tens of thousands of them inside the folder being worked in are
+        // indexed by editors and copied by other sync tools. Checkouts made before this moved
+        // bring theirs with them.
+        File objectsDir = ObjectStoreDir.forRepo(cacheKey);
+        ObjectStoreDir.migrate(repoDir, objectsDir);
+        this.localBlobStore = new FileSystem2BlobStore(new File(objectsDir, ObjectStoreDir.BLOBS));
+        this.localHashStore = new FileSystem2HashStore(new File(objectsDir, ObjectStoreDir.HASHES));
 
         // The bloom filters tell us what the server already has, and each one costs the server a full walk of the
         // repository to produce, so they are built on first use rather than eagerly here. A checkout that gets a pack
@@ -606,10 +618,9 @@ public class KSync3 {
         }
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
-        // Keyed on the repository when following one, not on the version. The cache is about local
-        // files, so it stays valid across a version change, and rebuilding it on every release
-        // would be a slow scan of the whole checkout for nothing.
-        String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
+        // Same key as the object store above: the cache is about local files, so it stays valid
+        // across a version change, and rebuilding it on every release would be a slow scan of the
+        // whole checkout for nothing.
         File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(cacheKey));
         try {
             fileHashCache = new BerkeleyDbFileHashCache(envDir);

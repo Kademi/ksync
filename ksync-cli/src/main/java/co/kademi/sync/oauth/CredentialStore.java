@@ -205,6 +205,32 @@ public class CredentialStore {
     }
 
     /**
+     * Where rebuildable per-user data belongs, as opposed to configuration.
+     *
+     * Deliberately not userConfigDir: on Windows that is the roaming AppData, which a managed
+     * profile copies to a server at logon, and an object store is the last thing that should be
+     * carried over a network. Everything under here can be deleted and fetched again.
+     */
+    public static Path userCacheDir() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("win")) {
+            String localAppData = System.getenv("LocalAppData");
+            if (StringUtils.isNotBlank(localAppData)) {
+                return Paths.get(localAppData);
+            }
+            return Paths.get(System.getProperty("user.home"), "AppData", "Local");
+        }
+        if (os.contains("mac") || os.contains("darwin")) {
+            return Paths.get(System.getProperty("user.home"), "Library", "Caches");
+        }
+        String xdg = System.getenv("XDG_CACHE_HOME");
+        if (StringUtils.isNotBlank(xdg)) {
+            return Paths.get(xdg);
+        }
+        return Paths.get(System.getProperty("user.home"), ".cache");
+    }
+
+    /**
      * Credentials are keyed by host so one file serves several Kademi accounts, and a url with
      * or without a scheme, path or trailing slash finds the same entry. The port is part of the
      * key, because a dev instance on another port is a different site.
