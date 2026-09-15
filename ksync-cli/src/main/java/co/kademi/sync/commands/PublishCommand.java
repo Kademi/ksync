@@ -12,7 +12,9 @@ import picocli.CommandLine.Option;
 public class PublishCommand extends ConnectedCommand {
 
     /** Nowhere to remember this: which apps to publish is decided per run. */
-    @Option(names = {"-a", "--appids"}, required = true, paramLabel = "<ids>", split = ",",
+    // Split on the surrounding space too: the ids are compared with equals, and the help itself
+    // shows the list written with spaces after the commas.
+    @Option(names = {"-a", "--appids"}, required = true, paramLabel = "<ids>", split = "\\s*,\\s*",
             description = "Which apps to publish. Asterisk for all; or a comma separated list of ids; or absolute paths, eg * ; or /libs; or leadman-lib, payment-lib")
     public List<String> appIds;
 

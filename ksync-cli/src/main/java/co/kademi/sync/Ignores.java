@@ -44,9 +44,38 @@ public class Ignores {
     public static final String RUN_SOURCE = "-ignore";
 
     private final List<Rule> rules;
+    /**
+     * Where the scanned directory sits below the one these rules were compiled against, slash
+     * terminated, or empty when they are the same. See {@link #under}.
+     */
+    private final String prefix;
 
     private Ignores(List<Rule> rules) {
+        this(rules, "");
+    }
+
+    private Ignores(List<Rule> rules, String prefix) {
         this.rules = rules;
+        this.prefix = prefix;
+    }
+
+    /**
+     * The same rules, to be matched by something scanning a directory below the root they were
+     * loaded for.
+     *
+     * A publish loads the rules once at the folder it is run from, but scans each app's version
+     * directory separately, so the paths it offers are relative to that directory. Without
+     * rebasing, an anchored rule is compared against the wrong thing: {@code /apps/foo/secret.js}
+     * would never match, and {@code /secret.js} would match one in every app.
+     *
+     * @param relPath the scanned directory, relative to the root the rules were loaded for
+     */
+    public Ignores under(String relPath) {
+        String sub = relPath == null ? "" : StringUtils.strip(relPath.replace('\\', '/'), "/");
+        if (sub.isEmpty()) {
+            return this;
+        }
+        return new Ignores(rules, prefix + sub + "/");
     }
 
     /** Compiles patterns in order. Later wins, so a "!" rule re-includes, as in gitignore. */
@@ -130,10 +159,12 @@ public class Ignores {
         if (path.isEmpty()) {
             return null;
         }
-        // Never syncable whatever the patterns say: it holds the object store and the remote ref
+        // Never syncable whatever the patterns say: it holds the object store and the remote ref.
+        // Checked before rebasing, because it is the scanned root's own state directory.
         if (path.equals(STATE_DIR) || path.startsWith(STATE_DIR + "/")) {
             return new Match(BUILT_IN_SOURCE, 0, STATE_DIR, true);
         }
+        path = prefix + path;
         Rule winner = null;
         for (Rule rule : rules) {
             if (rule.matches(path, isDir)) {

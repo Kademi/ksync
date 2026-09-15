@@ -58,6 +58,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.collections.ComparatorUtils;
@@ -193,7 +194,7 @@ public class AppDeployer {
 
     private boolean report; // if true, dont make any changes
     private boolean force;
-    private co.kademi.sync.Ignores ignores;
+    private co.kademi.sync.Ignores ignores = co.kademi.sync.Ignores.none();
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
     private final SyncHashCache fileHashCache;
@@ -221,7 +222,8 @@ public class AppDeployer {
         client.setUseDigestForPreemptiveAuth(false);
         boolean secure = url.getProtocol().equals("https");
         client.setSecure(secure);
-        this.appIds = appIds;
+        // Ids are compared with equals, so stray space around one would quietly skip that app
+        this.appIds = appIds == null ? null : appIds.stream().map(String::trim).collect(Collectors.toList());
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
         File localDataDir = new File(tmpDir, "appDeployer");
@@ -440,7 +442,7 @@ public class AppDeployer {
             AtomicBoolean needsPush = new AtomicBoolean();
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
                 needsPush.set(true);
-            }, null, fileWatchService, ignores, fileHashCache);
+            }, null, fileWatchService, ignoresFor(localRootDir), fileHashCache);
 
             String newHash = s.scan();
 
@@ -757,6 +759,21 @@ public class AppDeployer {
         }
     }
 
+    /**
+     * The ignore rules as seen from one app's version directory. They are loaded once, at the
+     * folder the publish was run from, but each version directory is scanned as its own root, so
+     * the paths offered to them are relative to that and need rebasing to line up.
+     */
+    private co.kademi.sync.Ignores ignoresFor(File localRootDir) {
+        java.nio.file.Path base = rootDir.getAbsoluteFile().toPath().normalize();
+        java.nio.file.Path dir = localRootDir.getAbsoluteFile().toPath().normalize();
+        if (!dir.startsWith(base)) {
+            log.warn("Publishing {} from outside {}, so its ignore rules are not applied", dir, base);
+            return ignores;
+        }
+        return ignores.under(base.relativize(dir).toString().replace(File.separatorChar, '/'));
+    }
+
     private boolean isProcess(File appDir) {
         if (appIds == null || appIds.isEmpty()) {
             return true;
@@ -801,7 +818,7 @@ public class AppDeployer {
             httpHashStore.setFilesBasePath("/_hashes/fileFanouts/");
 
             MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), localBlobStore, localHashStore, (String rootHash) -> {
-            }, null, fileSystemWatchingService, ignores, fileHashCache);
+            }, null, fileSystemWatchingService, ignoresFor(localRootDir), fileHashCache);
             return s.scan();
         } catch (Exception ex) {
             log.error("Could not find local hash for " + localRootDir, ex);

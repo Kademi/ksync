@@ -56,6 +56,7 @@ else echo "curl or wget is required" >&2; exit 1; fi
 # swapped download, not a compromised release. Exits rather than installing something
 # that does not match what the release says it is. $SUMS empty means there is nothing
 # to check against, which is the case for a KSYNC3_JAR_URL of your own.
+VERIFIED=""
 verify_sha256() {
   [ -n "$SUMS" ] || return 0
   expected=$(awk -v name="$2" '$2 == name { print $1 }' "$SUMS")
@@ -63,6 +64,7 @@ verify_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$1" | cut -d' ' -f1)
   elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$1" | cut -d' ' -f1)
   else echo "Neither sha256sum nor shasum is available, skipping the checksum check" >&2; return 0; fi
+  VERIFIED=1
   if [ "$actual" != "$expected" ]; then
     rm -f "$1"
     echo "Checksum mismatch for $2" >&2
@@ -113,7 +115,12 @@ case "$LOGIN_SHELL" in
     ;;
 esac
 if [ -n "$SUMS" ]; then
-  echo "Checksums verified"
+  # Only the checks that actually ran: with no sha256sum or shasum on the box there were none
+  if [ -n "$VERIFIED" ]; then
+    echo "Checksums verified"
+  else
+    echo "Checksums not verified" >&2
+  fi
   rm -f "$SUMS"
 fi
 

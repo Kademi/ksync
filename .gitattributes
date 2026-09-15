@@ -6,6 +6,3 @@
 # every line.
 *.ps1 text eol=crlf
 *.sh text eol=lf
-
-# The built tool, committed so a clone is usable without a build
-*.jar binary

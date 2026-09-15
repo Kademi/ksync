@@ -2,6 +2,7 @@ package co.kademi.sync.commands;
 
 import co.kademi.sync.Ignores;
 import java.io.File;
+import java.nio.file.Path;
 import java.util.List;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -73,20 +74,21 @@ public class CheckIgnoreCommand extends BaseCommand {
         return anyIgnored ? 0 : 1;
     }
 
-    /** @return the path relative to the checkout root, or null if it is outside */
+    /**
+     * A relative path is resolved against the root rather than taken as written, so that "./x" and
+     * "a/../x" reach the same rules as "x", and "../x" is recognised as outside.
+     *
+     * @return the path relative to the checkout root, or null if it is outside
+     */
     public static String relativize(File root, String given) {
-        File file = new File(given);
-        if (!file.isAbsolute()) {
-            return given.replace(File.separatorChar, '/');
-        }
-        String rootPath = root.getAbsoluteFile().toPath().normalize().toString();
-        String filePath = file.toPath().normalize().toString();
+        Path rootPath = root.getAbsoluteFile().toPath().normalize();
+        Path filePath = rootPath.resolve(new File(given).toPath()).normalize();
         if (filePath.equals(rootPath)) {
             return "";
         }
-        if (!filePath.startsWith(rootPath + File.separator)) {
+        if (!filePath.startsWith(rootPath)) {
             return null;
         }
-        return filePath.substring(rootPath.length() + 1).replace(File.separatorChar, '/');
+        return rootPath.relativize(filePath).toString().replace(File.separatorChar, '/');
     }
 }

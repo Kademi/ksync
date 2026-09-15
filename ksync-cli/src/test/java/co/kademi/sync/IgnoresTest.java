@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -157,5 +158,40 @@ public class IgnoresTest {
     public void aWindowsSeparator_isTreatedAsAPathSeparator() {
         Ignores ignores = Ignores.of("logs/*.log");
         assertTrue(ignores.ignored("logs\\a.log", false));
+    }
+
+    /**
+     * A publish loads its rules at the folder it is run from but scans each app version directory
+     * as a root of its own, so the paths reaching the rules are relative to the wrong thing.
+     */
+    @Test
+    public void under_matchesAnAnchoredRuleAgainstThePathFromTheRootTheRulesCameFrom() {
+        Ignores root = Ignores.of("/apps/leadman-lib/1.0.0/secret.js");
+        Ignores inApp = root.under("apps/leadman-lib/1.0.0");
+        assertTrue(inApp.ignored("secret.js", false));
+        // and does not leak to the same name in another app
+        assertFalse(root.under("apps/payment-lib/1.0.0").ignored("secret.js", false));
+        // the un-rebased view is what was wrong before
+        assertFalse(root.ignored("secret.js", false));
+    }
+
+    @Test
+    public void under_leavesUnanchoredRulesMatchingAtAnyDepth() {
+        Ignores inApp = Ignores.of("*.map").under("apps/leadman-lib/1.0.0");
+        assertTrue(inApp.ignored("js/app.js.map", false));
+    }
+
+    @Test
+    public void under_keepsTheScannedRootsOwnStateDirectoryUnsyncable() {
+        // .ksync is excluded relative to whatever is being scanned, not to where the rules loaded
+        assertTrue(Ignores.of().under("apps/leadman-lib/1.0.0").ignored(".ksync/ksync.properties", false));
+    }
+
+    @Test
+    public void under_withNothingBelow_isTheSameRules() {
+        Ignores ignores = Ignores.of("build/");
+        assertSame(ignores, ignores.under(""));
+        assertSame(ignores, ignores.under(null));
+        assertSame(ignores, ignores.under("/"));
     }
 }

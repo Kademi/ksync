@@ -95,4 +95,18 @@ public class CheckIgnoreTest {
                 CheckIgnoreCommand.relativize(root, new File(root, "theme/app.js").getAbsolutePath()));
         assertNull("outside the checkout", CheckIgnoreCommand.relativize(root, "/etc/passwd"));
     }
+
+    @Test
+    public void aRelativePathIsNormalised_soTabCompletionsDotSlashStillMatchesAnAnchoredRule() {
+        // the shell completes "src/app.js" as "./src/app.js", and an anchored rule compiles to
+        // ^src/app\.js, so leaving the path as written reported no rule at all
+        assertEquals("theme/app.js", CheckIgnoreCommand.relativize(root, "./theme/app.js"));
+        assertEquals("theme/app.js", CheckIgnoreCommand.relativize(root, "theme/sub/../app.js"));
+        assertEquals("", CheckIgnoreCommand.relativize(root, "."));
+    }
+
+    @Test
+    public void aRelativePathThatLeavesTheCheckout_isOutside() {
+        assertNull(CheckIgnoreCommand.relativize(root, "../elsewhere/app.js"));
+    }
 }

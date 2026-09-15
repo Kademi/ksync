@@ -468,7 +468,15 @@ public class MemoryLocalTripletStore {
      * relative to the root, so a bare name is not enough to answer with.
      */
     public boolean ignored(File childFile) {
-        return ignorePatterns.ignored(relativePath(root, childFile), childFile.isDirectory());
+        String rel = relativePath(root, childFile);
+        if (childFile.exists()) {
+            return ignorePatterns.ignored(rel, childFile.isDirectory());
+        }
+        // A delete event arrives after the path is gone, so isDirectory is false for what was a
+        // directory, and a directory-only rule like "build/" would stop covering it just as the
+        // delete needs to be suppressed. Nothing is left to ask, so take either answer: a rule
+        // that covered the path as a directory covered it.
+        return ignorePatterns.ignored(rel, true) || ignorePatterns.ignored(rel, false);
     }
 
     /** The path from a scan root to a file, slash separated, as the ignore rules expect it. */

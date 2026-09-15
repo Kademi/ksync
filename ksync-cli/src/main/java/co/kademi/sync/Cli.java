@@ -126,18 +126,36 @@ public class Cli {
     private static CommandLine.IParameterExceptionHandler urlAwareErrors(CommandLine.IParameterExceptionHandler wrapped) {
         return (ex, args) -> {
             CommandLine cl = ex.getCommandLine();
-            if (ex instanceof CommandLine.MissingParameterException
-                    && ex.getMessage() != null && ex.getMessage().contains("--url")) {
-                if ("logout".equals(cl.getCommandName())) {
-                    cl.getErr().println("Not in a ksync checkout, so there is no site to log out of.");
-                    cl.getErr().println("Name one with --url acme.kademi.co, or run this from a checkout.");
-                } else {
-                    cl.getErr().println(System.getProperty("user.dir")
-                            + " is not a ksync checkout, so there is no url to sync with.");
-                    cl.getErr().println("Give one with --url https://your-site/repositories/myrepo/version1,"
-                            + " or check the branch out here first.");
+            if (ex instanceof CommandLine.MissingParameterException) {
+                // Read the missing args rather than the message text, so that "--url" appearing in
+                // some other option's description cannot trigger this
+                List<String> alsoMissing = new ArrayList<>();
+                boolean urlMissing = false;
+                for (ArgSpec arg : ((CommandLine.MissingParameterException) ex).getMissing()) {
+                    String name = arg.isOption() ? ((OptionSpec) arg).longestName() : arg.paramLabel();
+                    if ("--url".equals(name)) {
+                        urlMissing = true;
+                    } else {
+                        alsoMissing.add(name);
+                    }
                 }
-                return cl.getCommandSpec().exitCodeOnInvalidInput();
+                if (urlMissing) {
+                    if ("logout".equals(cl.getCommandName())) {
+                        cl.getErr().println("Not in a ksync checkout, so there is no site to log out of.");
+                        cl.getErr().println("Name one with --url acme.kademi.co, or run this from a checkout.");
+                    } else {
+                        cl.getErr().println(System.getProperty("user.dir")
+                                + " is not a ksync checkout, so there is no url to sync with.");
+                        cl.getErr().println("Give one with --url https://your-site/repositories/myrepo/version1,"
+                                + " or check the branch out here first.");
+                    }
+                    // The checkout would have supplied the url but never these, so they are still
+                    // to be given by hand and saying only the first leaves a second run to fail
+                    if (!alsoMissing.isEmpty()) {
+                        cl.getErr().println("Also missing: " + StringUtils.join(alsoMissing, ", "));
+                    }
+                    return cl.getCommandSpec().exitCodeOnInvalidInput();
+                }
             }
             return wrapped.handleParseException(ex, args);
         };
