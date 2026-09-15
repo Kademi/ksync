@@ -29,6 +29,94 @@ public class StopKey {
     public static final String PROMPT = "Press q then Enter to stop, or ctrl-c.";
 
     /**
+     * How long the shutdown hooks get before the process is ended under them.
+     *
+     * Long enough for what they actually do - write a small file, drop the status icon - and
+     * short enough that someone who has just asked for the sync to stop does not go looking for
+     * the task manager.
+     */
+    static final long SHUTDOWN_GRACE_MILLIS = 3000;
+
+    /**
+     * Makes sure that asking the process to end actually ends it.
+     *
+     * Every way out of a sync goes through System.exit, which runs the shutdown hooks: that is
+     * how the status file is left saying stopped and the icon is removed, and normally it is over
+     * in milliseconds. When a hook does not return, System.exit never comes back, and the process
+     * stays up with nothing left watching - which is what "Stopping." followed by a sync that
+     * never stopped is, and the likeliest reason ctrl-c leaves one running on Windows too.
+     *
+     * So the hooks get {@link #SHUTDOWN_GRACE_MILLIS} and then the jvm is halted under them. What
+     * is lost by halting is small: the status file is written by rename, so it is either the old
+     * one or the new one and never half of either, and a status icon outliving its process is
+     * cosmetic. What is gained is that stop means stop.
+     *
+     * Armed as a hook rather than only on the way out of the key loop, so that it covers ctrl-c,
+     * a kill, and the sync ending itself, not just q.
+     *
+     * @param debug whether to print what shutdown was waiting on, carried in rather than asked of
+     * the logger, which by then may have stopped
+     */
+    public static void armShutdownWatchdog(boolean debug) {
+        try {
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> startWatchdog(0, debug), "ksync-shutdown-arm"));
+        } catch (RuntimeException ex) {
+            log.debug("Could not arm the shutdown watchdog", ex);
+        }
+    }
+
+    /**
+     * A daemon, so it never delays a shutdown that is going fine, and started rather than slept
+     * in inside the hook because hooks run together and the jvm waits for all of them: sleeping
+     * here would add the grace period to every clean exit.
+     */
+    private static void startWatchdog(int code, boolean debug) {
+        Thread watchdog = new Thread(watchdogTask(SHUTDOWN_GRACE_MILLIS, debug,
+                () -> Runtime.getRuntime().halt(code)), "ksync-shutdown-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    /**
+     * @param end what to do when the grace period has passed and the process is still here, which
+     * outside a test is halting the jvm
+     */
+    static Runnable watchdogTask(long graceMillis, boolean debug, Runnable end) {
+        return () -> {
+            try {
+                Thread.sleep(graceMillis);
+            } catch (InterruptedException ex) {
+                return; // shutdown finished and took this with it
+            }
+            // Straight to stderr, not through the log: log4j has a shutdown hook of its own, and
+            // by the time this fires it has usually stopped the appenders, so a logged line goes
+            // nowhere. Checked - the warn this replaces was missing from the run it halted, which
+            // would have left the one line explaining why the process ended unprinted.
+            System.err.println("ksync: shutting down did not finish in " + graceMillis
+                    + "ms, so ending the process now. Run the sync with -debug to see what it was waiting on.");
+            if (debug) {
+                printStuckThreads();
+            }
+            end.run();
+        };
+    }
+
+    /**
+     * What everything was doing when shutdown stuck, which is the only evidence of why it did -
+     * and this is reported from machines it cannot be reproduced on.
+     */
+    private static void printStuckThreads() {
+        for (java.util.Map.Entry<Thread, StackTraceElement[]> entry : Thread.getAllStackTraces().entrySet()) {
+            StringBuilder sb = new StringBuilder("ksync: ").append(entry.getKey().getName())
+                    .append(" (").append(entry.getKey().getState()).append(")");
+            for (StackTraceElement frame : entry.getValue()) {
+                sb.append("\n    at ").append(frame);
+            }
+            System.err.println(sb);
+        }
+    }
+
+    /**
      * Whether a typed line is asking for the sync to stop.
      *
      * More than one word for it, because the whole point is to be reachable: someone whose ctrl-c

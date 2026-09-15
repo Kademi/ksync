@@ -26,6 +26,9 @@ public class SyncCommand extends SyncingCommand {
 
     @Override
     protected Integer run() throws Exception {
+        // Before anything is started, so it covers a ctrl-c during the initial scan as well as
+        // the ways this command ends on purpose
+        StopKey.armShutdownWatchdog(global.debug);
         KSync3.sync(this);
         // the watcher runs on its own threads, so hold this one until it is told to stop
         return StopKey.waitUntilStopped();

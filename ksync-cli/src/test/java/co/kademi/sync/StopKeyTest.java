@@ -1,8 +1,11 @@
 package co.kademi.sync;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -58,5 +61,38 @@ public class StopKeyTest {
     @Test
     public void endOfInput_ends() {
         assertEquals(0, StopKey.readUntilStopped(typed()));
+    }
+
+    /**
+     * Saying stop has to mean stopped. A shutdown hook that never returns leaves System.exit
+     * hanging, and with it a process that answers to nothing short of a kill - which is what
+     * "Stopping." followed by a sync that kept running turned out to be.
+     */
+    @Test
+    public void shutdownThatDoesNotFinish_isEndedAnyway() throws Exception {
+        PrintStream realErr = System.err;
+        System.setErr(new PrintStream(new ByteArrayOutputStream(), true, "UTF-8"));
+        try {
+            AtomicBoolean ended = new AtomicBoolean();
+            Thread t = new Thread(StopKey.watchdogTask(20, false, () -> ended.set(true)));
+            t.start();
+            t.join(5000);
+
+            assertTrue("the watchdog should have ended the process", ended.get());
+        } finally {
+            System.setErr(realErr);
+        }
+    }
+
+    /** A shutdown that finishes takes the watchdog with it, rather than halting a live process */
+    @Test
+    public void aShutdownThatFinishes_isLeftAlone() throws Exception {
+        AtomicBoolean ended = new AtomicBoolean();
+        Thread t = new Thread(StopKey.watchdogTask(60000, false, () -> ended.set(true)));
+        t.start();
+        t.interrupt();
+        t.join(5000);
+
+        assertFalse("nothing to rescue, so nothing should have been halted", ended.get());
     }
 }
