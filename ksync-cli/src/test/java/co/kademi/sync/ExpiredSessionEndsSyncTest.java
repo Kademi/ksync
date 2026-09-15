@@ -72,7 +72,7 @@ public class ExpiredSessionEndsSyncTest {
         SyncStatusReporter status = reporter(r);
         NotLoggedInException ex = new NotLoggedInException("The session for acme has expired. Run: ksync3 login --oauth");
 
-        assertTrue(KSync3.reportPushFailure(status, ex));
+        assertTrue(KSync3.reportPushFailure(status, ex, true));
         assertEquals(SyncState.FAILED, r.last().getState());
         assertEquals(ex.getMessage(), r.last().getDetail());
     }
@@ -84,7 +84,7 @@ public class ExpiredSessionEndsSyncTest {
         SyncStatusReporter status = reporter(r);
         NotLoggedInException cause = new NotLoggedInException("log in again");
 
-        assertTrue(KSync3.reportPushFailure(status, new IOException("get failed", new RuntimeException(cause))));
+        assertTrue(KSync3.reportPushFailure(status, new IOException("get failed", new RuntimeException(cause)), true));
     }
 
     /** An unreachable server is temporary, and the next local change is worth another try */
@@ -93,7 +93,21 @@ public class ExpiredSessionEndsSyncTest {
         Recorder r = new Recorder();
         SyncStatusReporter status = reporter(r);
 
-        assertFalse(KSync3.reportPushFailure(status, new IOException("push", new ConnectException("Connection refused"))));
+        assertFalse(KSync3.reportPushFailure(status, new IOException("push", new ConnectException("Connection refused")), true));
+        assertEquals(SyncState.OFFLINE, r.last().getState());
+    }
+
+    /**
+     * The same failure before the sync is up is a failure to start, not a blip to wait out: the
+     * push the initial scan asked for has failed, so nothing has ever worked, and a sync that
+     * stays running here watches a checkout it cannot push and looks alive while doing it.
+     */
+    @Test
+    public void aFailureBeforeTheSyncIsWatchingEndsIt() throws Exception {
+        Recorder r = new Recorder();
+        SyncStatusReporter status = reporter(r);
+
+        assertTrue(KSync3.reportPushFailure(status, new IOException("push", new ConnectException("Connection refused")), false));
         assertEquals(SyncState.OFFLINE, r.last().getState());
     }
 }

@@ -27,17 +27,30 @@ public class KSync3Utils {
         return fname;
     }
 
+    /**
+     * One scanner for the whole run.
+     *
+     * Each new Scanner over System.in reads ahead into a buffer of its own, so a second one built
+     * for the next question finds the stream already drained and throws. That only shows up
+     * without a console - a terminal is answered through Console instead - which is exactly the
+     * scripted run that pipes its answers in, and init asks two or three things in a row.
+     */
+    private static Scanner stdin;
+
+    private static synchronized String readLine() {
+        if (stdin == null) {
+            stdin = new Scanner(System.in);
+        }
+        return stdin.hasNextLine() ? stdin.nextLine() : null;
+    }
+
     public static String getInput(String text) {
         Console con = System.console();
-        String s;
         if (con != null) {
-            s = con.readLine("Please enter " + text + ": ");
-        } else {
-            Scanner scanner = new Scanner(System.in);
-            System.out.println("Please enter " + text + ": ");
-            s = scanner.nextLine();
+            return con.readLine("Please enter " + text + ": ");
         }
-        return s;
+        System.out.println("Please enter " + text + ": ");
+        return readLine();
     }
 
     /**
@@ -68,9 +81,8 @@ public class KSync3Utils {
         if (con != null) {
             return con.readLine("Please enter " + optionName + " - " + description + ": ");
         }
-        Scanner scanner = new Scanner(System.in);
         System.out.println("Please enter " + optionName + " - " + description + ": ");
-        return scanner.nextLine();
+        return readLine();
     }
 
     public static String getPassword(String given, String user, String url) {
@@ -81,9 +93,10 @@ public class KSync3Utils {
                 char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ": ");
                 s = new String(chars);
             } else {
-                Scanner scanner = new Scanner(System.in);
                 System.out.println("Enter your password for " + user + "@" + url + ": ");
-                s = scanner.next();
+                // The whole line: a password is allowed to have a space in it, and next() would
+                // take the first word and leave the rest to be read as the answer to something else
+                s = readLine();
             }
         }
         return s;

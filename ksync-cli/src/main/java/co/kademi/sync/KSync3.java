@@ -17,6 +17,7 @@ import co.kademi.sync.commands.BaseCommand;
 import co.kademi.sync.commands.CheckoutCommand;
 import co.kademi.sync.commands.ConflictOptions;
 import co.kademi.sync.commands.IgnoreCommand;
+import co.kademi.sync.commands.InitCommand;
 import co.kademi.sync.commands.LoginCommand;
 import co.kademi.sync.commands.LogoutCommand;
 import co.kademi.sync.commands.PullCommand;
@@ -56,6 +57,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -214,6 +216,90 @@ public class KSync3 {
             t = t.getCause();
         }
         return SyncState.FAILED;
+    }
+
+    /**
+     * @return the first exception of this type in the chain, or null. The http client wraps, so
+     * the one that says what the server answered is rarely the one caught.
+     */
+    private static <T extends Throwable> T find(Throwable ex, Class<T> type) {
+        Throwable t = ex;
+        // bounded for the same reason as stateFor: a cause chain can be made to point back at itself
+        for (int i = 0; t != null && i < 20; i++) {
+            if (type.isInstance(t)) {
+                return type.cast(t);
+            }
+            t = t.getCause();
+        }
+        return null;
+    }
+
+    /**
+     * The innermost message in a failure, which is the one that says what actually went wrong.
+     *
+     * A refused connection arrives wrapped three deep, and the outermost layer only says that a
+     * get failed.
+     */
+    private static String rootCauseMessage(Throwable ex) {
+        Throwable t = ex;
+        // bounded for the same reason as stateFor: a cause chain can be made to point back at itself
+        for (int i = 0; t.getCause() != null && i < 20; i++) {
+            t = t.getCause();
+        }
+        return StringUtils.isBlank(t.getMessage()) ? t.getClass().getSimpleName() : t.getMessage();
+    }
+
+    /**
+     * An http client for a site, carrying whichever way of authenticating is in hand.
+     *
+     * @param user the username, which bearer auth still wants for identity and which may be null
+     * when only a stored session is known
+     * @param pwd a password to use, or null
+     * @param cookies a saved cookie login, or null
+     * @param oauth a stored OAuth2 session, or null
+     */
+    static Host newClient(String sRemoteAddress, String user, String pwd, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException {
+        int timeout = 180000;
+        URL url = new URL(sRemoteAddress);
+        Host client;
+        if (oauth != null) {
+            // Bearer auth carries the identity, so no cookies and no Basic auth
+            client = new BearerHost(url.getHost(), null, url.getPort(), user, oauth::accessToken, timeout);
+            cookies = null;
+        } else {
+            client = new Host(url.getHost(), null, url.getPort(), user, pwd, null, timeout, new java.util.concurrent.ConcurrentHashMap<>(), null);
+            if (cookies != null && cookies.isEmpty()) {
+                client.setUsePreemptiveAuth(true);
+            } else {
+                client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
+            }
+        }
+        client.setSecure(url.getProtocol().equals("https"));
+        client.setTimeout(timeout);
+        log.debug("Using timeout of " + timeout + "ms");
+        client.setUseDigestForPreemptiveAuth(false);
+        if (cookies != null) {
+            client.getCookies().putAll(cookies);
+        }
+        return client;
+    }
+
+    /**
+     * The failure to throw for something that went wrong while reaching the server.
+     *
+     * A server that could not be reached at all gets one line: the trace is http client
+     * internals, and the thing to do about it - check the url, check the network - is not in
+     * there. Anything else is handed back as it came, because its trace does have something to
+     * say.
+     *
+     * @param message what was being attempted, which the reason is appended to
+     */
+    private static RuntimeException asFailure(Exception ex, String message) {
+        if (stateFor(ex) == SyncState.OFFLINE) {
+            return new SetupException(message + ": " + rootCauseMessage(ex)
+                    + ". Check the url and that you are online", ex);
+        }
+        return ex instanceof RuntimeException ? (RuntimeException) ex : new RuntimeException(ex);
     }
 
     /**
@@ -392,6 +478,219 @@ public class KSync3 {
         log.info("A checkout can carry its own {} too, which the whole team shares", Ignores.IGNORE_FILE);
     }
 
+    public static final String URL_PROMPT = "the branch or repository to sync with, eg https://your-site/repositories/myrepo/version1";
+
+    /**
+     * Sets a directory up to sync with a branch, and signs in to its site, without fetching a
+     * single file.
+     *
+     * The order is login first, then resolve: a repository will not say which version is latest
+     * to someone it does not know, so asking before signing in reports a 401 in place of the
+     * answer. Everything a checkout records is recorded here, so afterwards this directory is a
+     * checkout in every respect except that nothing has been downloaded into it.
+     *
+     * @return 0 when the directory is set up, 1 when it is not
+     */
+    public static Integer init(InitCommand cmd) throws Exception {
+        int[] exit = {0};
+        KSyncUtils.withDir((File dir) -> {
+            File configDir = new File(dir, ".ksync");
+            String already = KSyncUtils.targetUrl(KSyncUtils.readProps(configDir));
+            if (already != null) {
+                reportExisting(dir, configDir, already);
+                return;
+            }
+
+            String url = KSyncUtils.requireUrl(KSync3Utils.resolve(cmd.url, "url", URL_PROMPT));
+            String site = KSyncUtils.siteUrl(url);
+            requireReachable(url, site);
+            String user = cmd.user();
+
+            String login = storedLogin(url);
+            if (login != null) {
+                log.info("Already signed in to {} with {}", site, login);
+            } else {
+                user = signIn(dir, configDir, url, site, cmd);
+                if (user == null && storedLogin(url) == null) {
+                    exit[0] = 1;
+                    return;
+                }
+            }
+
+            exit[0] = record(dir, configDir, url, user);
+        }, cmd);
+        return exit[0];
+    }
+
+    /**
+     * Reports a directory that is already set up, and changes nothing.
+     *
+     * Nothing is asked of the server for this: the question is what this directory is pointed at,
+     * which is answered on disk, and a network round trip would only add a way for it to fail.
+     */
+    private static void reportExisting(File dir, File configDir, String target) {
+        Properties props = KSyncUtils.readProps(configDir);
+        log.info("{} is already set up to sync with {}", dir.getAbsolutePath(), target);
+        if (StringUtils.isNotBlank(props.getProperty("repoUrl"))) {
+            log.info("It follows the repository, and is currently on {}",
+                    RepoMeta.versionNameOf(props.getProperty("url")));
+        }
+        String login = storedLogin(target);
+        if (login == null) {
+            log.info("There is no stored login for {}. Run: ksync3 login --url {}", KSyncUtils.siteUrl(target), target);
+        } else {
+            log.info("Signed in to {} with {}", KSyncUtils.siteUrl(target), login);
+        }
+        log.info("Nothing to change. To point it somewhere else, remove {} first",
+                new File(configDir, "ksync.properties").getAbsolutePath());
+    }
+
+    /**
+     * Checks the site is there at all, before anyone is asked to type a password into it.
+     *
+     * A refusal is a fine answer: it means the server is up and wants a login, which is the next
+     * thing this does. What this is for is the url that goes nowhere - a name typed wrongly, a
+     * vpn that is not up - which otherwise is reported only after a username and a password have
+     * been typed in after it.
+     */
+    private static void requireReachable(String url, String site) throws MalformedURLException {
+        Host client = newClient(url, null, null, null, null);
+        try {
+            client.get(RepoMeta.withTrailingSlash(new URL(url).getFile()) + "?type=hash");
+        } catch (HttpException | NotAuthorizedException | BadRequestException | ConflictException | NotFoundException ex) {
+            log.debug("{} answered {} without a login, which is not an answer to whether it is there", url, ex.toString());
+        } catch (RuntimeException ex) {
+            throw asFailure(ex, "Could not reach " + site);
+        }
+    }
+
+    /**
+     * How this machine would authenticate to a site, as a phrase to print, or null when it has no
+     * way to.
+     */
+    private static String storedLogin(String url) {
+        if (StringUtils.isNotBlank(System.getenv(OAuth2Client.TOKEN_ENV_VAR))) {
+            return "the " + OAuth2Client.TOKEN_ENV_VAR + " set in this environment";
+        }
+        if (KSyncUtils.oauth2SessionOrNull(url) != null) {
+            return "an OAuth2 session";
+        }
+        Map<String, String> cookies = KSyncUtils.getCookies(url);
+        if (cookies.isEmpty()) {
+            return null;
+        }
+        String userUrl = cookies.get("miltonUserUrl");
+        // Only the readable shape. The other one a server sends is base64 with a b64 prefix, and
+        // a line of that tells whoever reads it nothing about who they are signed in as.
+        return userUrl != null && userUrl.startsWith("/users/")
+                ? "a saved login as " + StringUtils.strip(userUrl.substring("/users/".length()), "/")
+                : "a saved login";
+    }
+
+    /**
+     * Signs in to a site, by browser where the site offers it and by password where it does not.
+     *
+     * A browser first because it is the one that needs no password typed and expires on its own,
+     * and because the fallback costs nothing: a site without OAuth2 has no metadata document, so
+     * it says so in one request. Naming a user with -u says which way is wanted and skips
+     * straight to the password.
+     *
+     * @return the username signed in as, or null - which is not a failure on its own, because an
+     * OAuth2 login knows the site rather than the name
+     */
+    private static String signIn(File dir, File configDir, String url, String site, InitCommand cmd) throws Exception {
+        if (cmd.user() == null) {
+            try {
+                KSyncUtils.newOAuth2Client(url).login();
+                log.info("Signed in to {}", site);
+                return null;
+            } catch (IOException | RuntimeException ex) {
+                if (cmd.oauth()) {
+                    throw new SetupException("Could not sign in to " + site + " with a browser: "
+                            + rootCauseMessage(ex), ex);
+                }
+                log.info("Could not sign in to {} with a browser: {}", site, rootCauseMessage(ex));
+                log.info("Falling back to a username and password");
+            }
+        }
+        String user = KSync3Utils.resolve(cmd.user(), "user", KSyncUtils.USER_PROMPT);
+        String pwd = KSync3Utils.getPassword(cmd.password(), user, url);
+        new KSync3(dir, url, user, pwd, configDir, false, null, null).login(null);
+        if (storedLogin(url) == null) {
+            log.error("Could not sign in to {} as {}, so nothing has been set up here", site, user);
+            return null;
+        }
+        log.info("Signed in to {} as {}", site, user);
+        return user;
+    }
+
+    /**
+     * Works out what the url names, checks the branch answers, and records it.
+     *
+     * The check is the same request a push makes, so a url which is a typo, or a version this
+     * login cannot read, is reported now rather than by the first sync. Nothing is recorded when
+     * it fails: a .ksync naming a branch that does not answer is worse than no .ksync at all,
+     * because every later command in this directory would take its url from it.
+     *
+     * @return the exit code
+     */
+    private static Integer record(File dir, File configDir, String url, String user) throws Exception {
+        Host client = newClient(url, user, null, KSyncUtils.getCookies(url), KSyncUtils.oauth2SessionOrNull(url));
+        RepoMeta meta = RepoMeta.fetch(client, url);
+        String versionUrl = url;
+        String repoUrl = null;
+        if (meta != null) {
+            RepoMeta.Version latest = meta.getLatestVersion();
+            if (latest == null) {
+                throw new SetupException("No version of " + url + " has a version number for a name,"
+                        + " so there is no latest one to follow. It has: " + String.join(", ", meta.versionNames())
+                        + ". Give the url of one of those to pin this directory to it");
+            }
+            repoUrl = url;
+            versionUrl = RepoMeta.versionUrl(url, latest.getName());
+            log.info("{} is a repository. Its latest version is {}{}", url, latest.getName(),
+                    meta.getLiveVersion() == null ? "" : ", and the live one is " + meta.getLiveVersion().getName());
+        }
+
+        String hash = branchHash(client, versionUrl);
+        if (hash == null) {
+            log.error("{} did not answer with a branch hash, so it is not a version this login can sync with."
+                    + " Nothing has been set up here", versionUrl);
+            return 1;
+        }
+        log.debug("Branch {} is at {}", versionUrl, hash);
+
+        configDir.mkdirs();
+        KSyncUtils.writeProps(versionUrl, user, repoUrl, configDir);
+        log.info("{} now syncs with {}", dir.getAbsolutePath(), versionUrl);
+        if (repoUrl != null) {
+            log.info("It follows the repository, so it moves to each new version as one is published");
+        }
+        // Said plainly, because this is the one way init differs from checkout, and a directory
+        // holding nothing is otherwise indistinguishable from a checkout that has been emptied
+        log.info("Nothing has been downloaded. Run: ksync3 pull to bring the branch down here,"
+                + " or ksync3 sync to push what is already here as it changes");
+        return 0;
+    }
+
+    /**
+     * @return the branch hash at a url, or null when it does not answer with one
+     */
+    private static String branchHash(Host client, String versionUrl) throws MalformedURLException {
+        String path = RepoMeta.withTrailingSlash(new URL(versionUrl).getFile());
+        try {
+            byte[] resp = client.get(path + "?type=hash");
+            if (resp == null) {
+                return null;
+            }
+            String s = new String(resp).trim();
+            return HASH.matcher(s).matches() ? s : null;
+        } catch (HttpException | NotAuthorizedException | BadRequestException | ConflictException | NotFoundException ex) {
+            log.debug("Asked {} for a branch hash and it refused", path, ex);
+            return null;
+        }
+    }
+
     public static void checkout(CheckoutCommand cmd) throws Exception {
         log.info("Checking out..");
 
@@ -510,6 +809,14 @@ public class KSync3 {
      */
     private final SyncStatusReporter status;
 
+    /**
+     * Whether the sync got as far as watching for changes.
+     *
+     * Until it has, a failed push is a failure to start, and is treated as one. After it has, the
+     * sync is up and the same failure is something to wait out. See {@link #pushFailed}.
+     */
+    private volatile boolean watching;
+
     public KSync3(File localDir, String sRemoteAddress, String user, String pwd, File configDir, boolean background, Ignores ignores, Map<String, String> cookies) throws MalformedURLException, IOException {
         this(localDir, sRemoteAddress, user, pwd, configDir, background, ignores, cookies, null);
     }
@@ -525,28 +832,7 @@ public class KSync3 {
         this.ignores = ignores == null ? Ignores.none() : ignores;
         eventManager = new EventManagerImpl();
 
-        int timeout = 180000;
-        URL url = new URL(sRemoteAddress);
-        if (oauth != null) {
-            // Bearer auth carries the identity, so no cookies and no Basic auth
-            client = new BearerHost(url.getHost(), null, url.getPort(), user, oauth::accessToken, timeout);
-            cookies = null;
-        } else {
-            client = new Host(url.getHost(), null, url.getPort(), user, pwd, null, timeout, new java.util.concurrent.ConcurrentHashMap<>(), null);
-            if (cookies != null && cookies.isEmpty()) {
-                client.setUsePreemptiveAuth(true);
-            } else {
-                client.setUsePreemptiveAuth(false); // do not send Basic auth ,we want to use cookie authentication
-            }
-        }
-        boolean secure = url.getProtocol().equals("https");
-        client.setSecure(secure);
-        client.setTimeout(timeout);
-        log.debug("Using timeout of " + timeout + "ms");
-        client.setUseDigestForPreemptiveAuth(false);
-        if (cookies != null) {
-            client.getCookies().putAll(cookies);
-        }
+        client = newClient(sRemoteAddress, user, pwd, cookies, oauth);
 
         // Which version to work against. Only now, because asking the repository needs the client,
         // and everything below is relative to the answer.
@@ -669,7 +955,7 @@ public class KSync3 {
      * commands get in {@link #handleKSync}.
      */
     private void pushFailed(Exception ex) {
-        if (!reportPushFailure(status, ex)) {
+        if (!reportPushFailure(status, ex, watching)) {
             return;
         }
         // Left in a state that says what happened, because this runs on a watch thread with
@@ -682,14 +968,25 @@ public class KSync3 {
     /**
      * Logs and records a failed push.
      *
+     * @param watching whether the sync is up and watching for changes, which is
+     * what makes waiting for the next change a sensible thing to do
      * @return true when the sync cannot continue, so the process should end
      */
-    static boolean reportPushFailure(SyncStatusReporter status, Exception ex) {
+    static boolean reportPushFailure(SyncStatusReporter status, Exception ex, boolean watching) {
         NotLoggedInException notLoggedIn = NotLoggedInException.find(ex);
         if (notLoggedIn == null) {
             log.error("Exception in file changed event handler", ex);
             status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
-            return false;
+            if (watching) {
+                return false;
+            }
+            // This is the push the initial scan asked for, and it failed before the sync was
+            // watching anything, so there is no next change to wait for and nothing has ever
+            // worked. Whoever ran the command is still at the terminal to read why, which will
+            // not be true of a failure an hour from now.
+            log.error("That was the first push, so the sync never started. Stopping,"
+                    + " rather than sitting here watching a checkout it has not once been able to push.");
+            return true;
         }
         log.error(notLoggedIn.getMessage());
         status.problem(SyncState.FAILED, notLoggedIn.getMessage());
@@ -711,12 +1008,17 @@ public class KSync3 {
         }
         try {
             repoMeta = RepoMeta.fetch(client, sRemoteAddress);
-        } catch (IOException ex) {
-            if (tracking == RepoMeta.Tracking.TRACK) {
-                throw ex; // it is known to be a repository, so there is no version to fall back to
+        } catch (IOException | RuntimeException ex) {
+            // RuntimeException as well as IOException, because a refused connection comes back
+            // from the http client wrapped in one, and without this the probe was optimistic in
+            // name only: the commonest failure of all escaped from here as a trace through the
+            // http client, before the command had said anything about what it was trying to do.
+            if (tracking != RepoMeta.Tracking.TRACK) {
+                log.debug("Could not check whether {} is a repository, treating it as a version", sRemoteAddress, ex);
+                return null;
             }
-            log.debug("Could not check whether {} is a repository, treating it as a version", sRemoteAddress, ex);
-            return null;
+            // it is known to be a repository, so there is no version to fall back to
+            throw asFailure(ex, "Could not reach " + sRemoteAddress + " to check which version to sync with");
         }
         if (repoMeta == null) {
             if (tracking == RepoMeta.Tracking.TRACK) {
@@ -752,13 +1054,47 @@ public class KSync3 {
     }
 
     private void start() throws MalformedURLException, IOException {
+        status.state(SyncState.STARTING, "checking the connection");
+        checkRemote();
         log.info("Do initial scan");
         status.state(SyncState.SCANNING, "initial scan");
         tripletStore.scan();
         log.info("Done initial scan, now begin monitoring..");
         tripletStore.start();
         log.debug("Done monitor init");
+        watching = true;
         status.ready("watching for local changes");
+    }
+
+    /**
+     * Asks the branch for its hash before any watching begins, so a sync that cannot work says so
+     * now instead of running on.
+     *
+     * A sync spends its life waiting for a file to change, so a broken connection has nothing to
+     * break against until someone saves a file, and if the initial scan finds nothing to push that
+     * may be hours away. Until then the process looks exactly like a working sync: still running,
+     * no error since the one at startup, an icon in the status bar. One request up front is the
+     * difference between that and a command that exits with the reason.
+     *
+     * This is the request every push makes anyway, so it costs a sync nothing it was not about to
+     * spend, and it exercises the whole path: the url, the network, and the login.
+     */
+    private void checkRemote() {
+        String remoteHash;
+        try {
+            remoteHash = getRemoteHash(branchPath);
+        } catch (RuntimeException ex) {
+            if (find(ex, NotAuthorizedException.class) != null) {
+                throw new SetupException(remoteAddress + " refused the login for " + client.user
+                        + ". Check the username and password, or run: ksync3 login", ex);
+            }
+            throw asFailure(ex, "Could not reach " + remoteAddress + " to start the sync");
+        }
+        if (remoteHash == null) {
+            throw new SetupException(remoteAddress + " did not answer with a hash for this branch,"
+                    + " so there is nothing to sync with. Check the url names a version of a repository");
+        }
+        log.info("Connected to {}", remoteAddress);
     }
 
     /**
@@ -833,6 +1169,12 @@ public class KSync3 {
                     break;
             }
         } catch (IOException ex) {
+            if (!mayAskFor2FA) {
+                // Best effort, from saveLogin, which says what to make of it. A stack trace here
+                // is noise in front of whatever the command itself is about to report, and it
+                // reads like the reason the command failed when it is not.
+                throw new RuntimeException(ex);
+            }
             log.error("login: exception occured", ex);
         }
     }
@@ -852,7 +1194,7 @@ public class KSync3 {
             login(null, false);
         } catch (RuntimeException ex) {
             log.warn("Could not save a session for {}, so the password will be needed again next time: {}",
-                    remoteAddress, ex.getMessage());
+                    remoteAddress, rootCauseMessage(ex));
         }
     }
 

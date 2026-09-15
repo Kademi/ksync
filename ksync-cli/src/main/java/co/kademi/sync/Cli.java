@@ -4,6 +4,7 @@ import co.kademi.sync.commands.BaseCommand;
 import co.kademi.sync.commands.CheckIgnoreCommand;
 import co.kademi.sync.commands.CheckoutCommand;
 import co.kademi.sync.commands.IgnoreCommand;
+import co.kademi.sync.commands.InitCommand;
 import co.kademi.sync.commands.LoginCommand;
 import co.kademi.sync.commands.LogoutCommand;
 import co.kademi.sync.commands.PublishCommand;
@@ -50,11 +51,12 @@ public class Cli {
                 "What a sync leaves out is decided by gitignore rules, in four layers, each able to undo the one before it: the built in defaults, then ~/.config/ksync/ignore for this machine, then a .ksyncignore in the checkout for the whole team, then --ignore for one run. Ask check-ignore which of them applied to a file."},
             footerHeading = "%nExamples:%n",
             footer = {
+                "  ksync3 init --url https://site.kademi.co/repositories/mysite",
                 "  ksync3 checkout --url https://site.kademi.co/repositories/mysite/version1",
                 "  ksync3 sync",
                 "  ksync3 check-ignore theme/dist/bundle.js"},
             subcommands = {
-                CheckoutCommand.class, PushCommand.class, PullCommand.class,
+                InitCommand.class, CheckoutCommand.class, PushCommand.class, PullCommand.class,
                 SyncCommand.class, VerifyCommand.class, LoginCommand.class, LogoutCommand.class,
                 IgnoreCommand.class, CheckIgnoreCommand.class,
                 PublishCommand.class

@@ -83,6 +83,19 @@ public class KSyncUtils {
     public static final String USER_PROMPT = "username to log in with, not your email address";
 
     /**
+     * What a directory is set up to sync with, from its own properties.
+     *
+     * The repository when it follows one, because that is what was asked for and the version
+     * under it is only where that has landed for now.
+     *
+     * @return the url, or null when these properties are not a checkout's
+     */
+    public static String targetUrl(Properties props) {
+        String repoUrl = props.getProperty("repoUrl");
+        return StringUtils.isNotBlank(repoUrl) ? repoUrl : StringUtils.trimToNull(props.getProperty("url"));
+    }
+
+    /**
      * Whether the server has to be asked which version this checkout belongs
      * on.
      *

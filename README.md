@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/Kademi/ksync/master/installers/inst
 
 Then, from your project folder (run `ksync3 --help` for the full list):
 ```sh
+ksync3 init --url https://your-site.kademi.co/repositories/myrepo   # point this folder at a branch and sign in
 ksync3 sync
 ```
 

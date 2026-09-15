@@ -7,6 +7,8 @@ import picocli.CommandLine.Option;
 @Command(name = "sync", header = "Watch for local changes and push each one as it happens.",
         description = {"Runs until stopped, pushing each change as it is saved. This is the command to leave running while you work.",
             "",
+            "If it cannot get going - the server is unreachable, the url is not a branch, or the first push fails - it says why and exits, rather than sitting there watching a checkout it cannot push.",
+            "",
             "Progress is written to .ksync/status.json for an editor or status bar to read, and shown in the OS status bar unless --notray."})
 public class SyncCommand extends SyncingCommand {
 
