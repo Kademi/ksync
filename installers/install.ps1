@@ -49,8 +49,12 @@ Invoke-WebRequest -Uri $JarUrl -OutFile "$HomeDir\ksync3.jar.tmp"
 # swapped download, not a compromised release. A KSYNC3_JAR_URL of your own has no
 # SHA256SUMS to check it against.
 if (-not $env:KSYNC3_JAR_URL) {
-    $sums = (Invoke-WebRequest -Uri "$BaseUrl/SHA256SUMS" -UseBasicParsing).Content
-    $line = $sums -split '\r?\n' | Where-Object { $_ -match '\s+ksync3\.jar\s*$' } | Select-Object -First 1
+    # To a file, then read it back. GitHub serves release assets as application/octet-stream,
+    # and Windows PowerShell hands back .Content as a byte array for anything it does not
+    # consider text, so splitting that into lines found nothing and every install failed here.
+    Invoke-WebRequest -Uri "$BaseUrl/SHA256SUMS" -OutFile "$HomeDir\SHA256SUMS.tmp"
+    $line = Get-Content "$HomeDir\SHA256SUMS.tmp" | Where-Object { $_ -match '\s+ksync3\.jar\s*$' } | Select-Object -First 1
+    Remove-Item -Force "$HomeDir\SHA256SUMS.tmp"
     if (-not $line) { throw "SHA256SUMS in the release has no line for ksync3.jar" }
     $expected = ($line -split '\s+')[0]
     $actual = (Get-FileHash "$HomeDir\ksync3.jar.tmp" -Algorithm SHA256).Hash
