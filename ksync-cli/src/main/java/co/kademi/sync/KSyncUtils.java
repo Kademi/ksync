@@ -5,6 +5,8 @@ import co.kademi.sync.commands.BaseCommand;
 import co.kademi.sync.commands.ConnectedCommand;
 import co.kademi.sync.oauth.OAuth2Client;
 import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -128,8 +130,8 @@ public class KSyncUtils {
         }
         url = url.trim();
         try {
-            new java.net.URL(url);
-        } catch (java.net.MalformedURLException ex) {
+            new URL(url);
+        } catch (MalformedURLException ex) {
             throw new SetupException("Not a valid url: " + url + " - it should look like https://your-site/repo/branch", ex);
         }
         return url;

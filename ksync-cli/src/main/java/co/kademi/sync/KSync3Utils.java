@@ -77,18 +77,26 @@ public class KSync3Utils {
         if (!promptIfNotPresent) {
             return null;
         }
-        Console con = System.console();
+        Console con = StopKey.terminal();
         if (con != null) {
             return con.readLine("Please enter " + optionName + " - " + description + ": ");
         }
+        // Still asked, because a scripted run pipes its answers in and the prompts belong in its
+        // log. Nothing coming back means nobody was there to answer, which is worth saying plainly
+        // rather than carrying a null into the request and failing later as some other error.
         System.out.println("Please enter " + optionName + " - " + description + ": ");
-        return readLine();
+        String answer = readLine();
+        if (StringUtils.isBlank(answer)) {
+            throw new SetupException("No " + optionName + " given and nothing to read it from."
+                    + " Pass --" + optionName + ", or run ksync3 login once and it is remembered.");
+        }
+        return answer;
     }
 
     public static String getPassword(String given, String user, String url) {
         String s = given;
         if (StringUtils.isBlank(s)) {
-            Console con = System.console();
+            Console con = StopKey.terminal();
             if (con != null) {
                 char[] chars = con.readPassword("Enter your password for " + user + "@" + url + ": ");
                 s = new String(chars);
@@ -97,6 +105,11 @@ public class KSync3Utils {
                 // The whole line: a password is allowed to have a space in it, and next() would
                 // take the first word and leave the rest to be read as the answer to something else
                 s = readLine();
+                if (StringUtils.isBlank(s)) {
+                    throw new SetupException("No password given and nothing to read it from."
+                            + " Pass --password, or --auth with an api key, or run ksync3 login once"
+                            + " and the session is remembered.");
+                }
             }
         }
         return s;
