@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -186,8 +187,21 @@ public class SyncStatusReporter {
         }
     }
 
+    private boolean isShutdownThread() {
+        return Thread.currentThread().getName().contains("shutdown");
+    }
+
+    private boolean isTraySink(StatusSink sink) {
+        String name = sink.getClass().getSimpleName();
+        return name.toLowerCase(Locale.ROOT).contains("tray") || sink instanceof TrayStatusIcon;
+    }
+
     private void publish() {
         for (StatusSink sink : sinks) {
+            if (isShutdownThread() && isTraySink(sink)) {
+                log.debug("Skipping tray status update during shutdown to avoid blocking exit");
+                continue;
+            }
             try {
                 sink.report(current);
             } catch (RuntimeException ex) {
@@ -226,6 +240,10 @@ public class SyncStatusReporter {
         }
         closed = true;
         for (StatusSink sink : sinks) {
+            if (isShutdownThread() && isTraySink(sink)) {
+                log.debug("Skipping tray status close during shutdown to avoid blocking exit");
+                continue;
+            }
             try {
                 sink.close();
             } catch (RuntimeException ex) {

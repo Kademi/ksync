@@ -173,6 +173,48 @@ public class SyncStatusReporterTest {
         assertEquals("nothing should be reported after close", before, r.reported.size());
     }
 
+    @Test
+    public void shutdownThreadSkipsTraySinks() throws Exception {
+        class TrayLikeSink implements StatusSink {
+            boolean reported;
+            boolean closed;
+
+            @Override
+            public void report(SyncStatus status) {
+                reported = true;
+            }
+
+            @Override
+            public boolean alert(String title, String body, boolean problem) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                closed = true;
+            }
+        }
+
+        TrayLikeSink sink = new TrayLikeSink();
+        SyncStatusReporter reporter = SyncStatusReporter.create("sync", tmp.getRoot(), tmp.newFolder(".ksync"),
+                "https://acme.kademi.co/", tmp.getRoot().toPath().resolve("status.json"), false);
+        java.lang.reflect.Field f = SyncStatusReporter.class.getDeclaredField("sinks");
+        f.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<StatusSink> sinks = (List<StatusSink>) f.get(reporter);
+        sinks.add(sink);
+
+        Thread shutdownThread = new Thread(() -> {
+            reporter.state(SyncState.IDLE, "clean shutdown");
+            reporter.close();
+        }, "ksync-status-shutdown");
+        shutdownThread.start();
+        shutdownThread.join();
+
+        assertEquals("tray-like sinks should be skipped during shutdown", false, sink.reported);
+        assertEquals("tray-like sinks should be skipped during shutdown", false, sink.closed);
+    }
+
     /** The commands with nothing to say still get a usable reporter, not null. */
     @Test
     public void theNoOpReporterAcceptsEverything() {
