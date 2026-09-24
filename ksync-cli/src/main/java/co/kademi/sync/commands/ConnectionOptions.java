@@ -13,14 +13,6 @@ public class ConnectionOptions {
     @ArgGroup(exclusive = true, heading = "%nAuthentication, when no login is stored for the site yet:%n")
     public Credentials credentials;
 
-    /**
-     * Outside the exclusive group on purpose: an option inside one loses its default when the
-     * group goes unmentioned, which would break the environment fallback.
-     */
-    @Option(names = {"-t", "--token"}, paramLabel = "<apikey>", defaultValue = "${env:KSYNC_TOKEN}",
-            description = "A KOAuth2 api key (ko2_ak_...) to authenticate with, used as given and never stored. Defaults to the KSYNC_TOKEN environment variable")
-    public String apiKey;
-
     @Option(names = {"-i", "--ignore"}, paramLabel = "<patterns>",
             description = "Comma separated file/folder name patterns to ignore for this run, on top of the built in ones and your ignore file. See the ignore command")
     public String ignore;
@@ -36,5 +28,14 @@ public class ConnectionOptions {
 
     public String authToken() {
         return credentials == null ? null : credentials.authToken;
+    }
+
+    /** --token, or an --auth value with no user in it, where people paste keys; OAuth2Client falls back to KSYNC_TOKEN. */
+    public String apiKey() {
+        String auth = authToken();
+        if (auth != null && !auth.contains(",")) {
+            return auth.trim();
+        }
+        return credentials == null ? null : credentials.apiKey;
     }
 }

@@ -52,6 +52,19 @@ public class AppIdsTest {
     }
 
     @Test
+    public void anApiKeyGivenAsAuthIsUsedAsTheApiKey() {
+        assertEquals("ko2_ak_abc", parse("-a", "x", "--auth", "ko2_ak_abc").connection.apiKey());
+        assertEquals(null, parse("-a", "x", "--auth", "brad,hash").connection.apiKey());
+        assertEquals("ko2_ak_abc", parse("-a", "x", "-t", "ko2_ak_abc").connection.apiKey());
+        assertEquals(null, parse("-a", "x").connection.apiKey());
+    }
+
+    @Test(expected = CommandLine.MutuallyExclusiveArgsException.class)
+    public void aTokenAndAUserTogetherIsAnError() {
+        parse("-a", "x", "-t", "ko2_ak_abc", "--user", "brad");
+    }
+
+    @Test
     public void repeatingTheOptionStillAccumulates() {
         assertEquals(Arrays.asList("leadman-lib", "payment-lib"),
                 parse("-a", "leadman-lib", "-a", "payment-lib").appIds);

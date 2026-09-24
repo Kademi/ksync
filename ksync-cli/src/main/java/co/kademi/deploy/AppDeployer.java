@@ -141,7 +141,7 @@ public class AppDeployer {
             }
 
             Map cookies = KSyncUtils.getCookies(url);
-            OAuth2Client oauth = KSyncUtils.oauth2SessionOrNull(url, cmd.connection.apiKey);
+            OAuth2Client oauth = KSyncUtils.oauth2SessionOrNull(url, cmd.connection.apiKey());
             // see KSyncUtils.withKsync: --user is in an exclusive group, so no default reaches it
             Properties props = KSyncUtils.readProps(configDir);
             String givenUser = StringUtils.defaultIfBlank(cmd.connection.user(), props.getProperty("user"));

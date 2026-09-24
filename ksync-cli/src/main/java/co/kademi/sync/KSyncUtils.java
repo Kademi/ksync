@@ -53,7 +53,7 @@ public class KSyncUtils {
                 writeLoginProps(userUrl, token, url);
             }
             Map cookies = KSyncUtils.getCookies(url);
-            OAuth2Client oauth = oauth2SessionOrNull(url, cmd.connection.apiKey);
+            OAuth2Client oauth = oauth2SessionOrNull(url, cmd.connection.apiKey());
             // Not from the default value provider: --user lives in an exclusive group, and picocli
             // never builds a group nothing matched, so a default has nowhere to land.
             String givenUser = StringUtils.defaultIfBlank(cmd.connection.user(), props.getProperty("user"));
