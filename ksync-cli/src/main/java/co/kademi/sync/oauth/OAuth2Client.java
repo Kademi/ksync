@@ -66,6 +66,9 @@ public class OAuth2Client {
     // The server gives an auth code 30 seconds to live, so there is no point waiting much
     // longer than a few minutes for the user to finish in the browser.
     private static final int BROWSER_TIMEOUT_SECS = 300;
+
+    /** Replaced by tests. */
+    int browserTimeoutSecs = BROWSER_TIMEOUT_SECS;
     // Refresh this far ahead of real expiry, so a request never goes out holding a token which
     // expires while it is in flight.
     private static final long REFRESH_LEEWAY_MILLIS = 60_000;
@@ -185,7 +188,9 @@ public class OAuth2Client {
         // come up on the same port every time. Claim it now and hold it for the whole flow.
         try (Callback callback = new Callback(portOf(creds().redirectUri))) {
             URI callbackUri = URI.create(callback.redirectUri());
-            if (StringUtils.isBlank(creds().clientId) || !callback.redirectUri().equals(creds().redirectUri)) {
+            boolean reusing = StringUtils.isNotBlank(creds().clientId) && callback.redirectUri().equals(creds().redirectUri)
+                    && stillRegistered();
+            if (!reusing) {
                 register(metadata, callbackUri);
             }
 
@@ -204,7 +209,13 @@ public class OAuth2Client {
 
             AuthorizationResponse response;
             try {
-                response = AuthorizationResponse.parse(callback.await());
+                response = AuthorizationResponse.parse(callback.await(browserTimeoutSecs));
+            } catch (co.kademi.sync.SetupException ex) {
+                if (reusing) {
+                    // A deleted client gets an error page and no redirect (RFC 6749 4.1.2.1), so register afresh next time
+                    forgetRegistration();
+                }
+                throw ex;
             } catch (ParseException ex) {
                 throw new IOException("Could not read the authorization response: " + ex.getMessage(), ex);
             }
@@ -224,16 +235,100 @@ public class OAuth2Client {
     }
 
     /**
-     * Discards the stored session. The client registration is kept, so a
-     * re-login skips it.
+     * Discards the stored session, then asks the server to revoke it (RFC 7009) and to delete the
+     * registration (RFC 7592) where it offers them; either failing still leaves this machine signed out.
      */
     public void logout() throws IOException {
         CredentialStore.Credentials c = creds();
+        String refresh = c.refreshToken;
+        String access = c.accessToken;
         c.accessToken = null;
         c.refreshToken = null;
         c.expiresAt = 0;
         c.scopes.clear();
         saveCreds();
+        if (StringUtils.isNotBlank(refresh) || StringUtils.isNotBlank(access)) {
+            revoke(refresh, "refresh_token");
+            revoke(access, "access_token");
+        }
+        deleteRegistration();
+    }
+
+    private void revoke(String token, String hint) {
+        if (StringUtils.isBlank(token) || StringUtils.isBlank(creds().clientId)) {
+            return;
+        }
+        try {
+            URI endpoint = discover().getRevocationEndpointURI();
+            if (endpoint == null) {
+                return;
+            }
+            HTTPRequest r = new HTTPRequest(HTTPRequest.Method.POST, endpoint.toURL());
+            r.setEntityContentType(com.nimbusds.common.contenttype.ContentType.APPLICATION_URLENCODED);
+            r.setBody("token=" + urlEncode(token) + "&token_type_hint=" + hint + "&client_id=" + urlEncode(creds().clientId));
+            HTTPResponse resp = r.send();
+            if (resp.getStatusCode() != 200) {
+                log.info("{} did not revoke the {} ({}), it is removed from this machine only", host, hint, resp.getStatusCode());
+            }
+        } catch (IOException | RuntimeException ex) {
+            log.info("Could not reach {} to revoke the {}, it is removed from this machine only: {}", host, hint, ex.toString());
+        }
+    }
+
+    /** @return false only when the server says the stored client is gone; true when it cannot say. */
+    private boolean stillRegistered() {
+        int status = registrationRequest(HTTPRequest.Method.GET);
+        if (status == 401 || status == 403 || status == 404) {
+            log.info("The ksync client registered with {} no longer exists, registering again", host);
+            forgetRegistration();
+            return false;
+        }
+        return true;
+    }
+
+    private void deleteRegistration() {
+        int status = registrationRequest(HTTPRequest.Method.DELETE);
+        if (status == 204 || status == 200 || status == 401 || status == 404) {
+            forgetRegistration();
+        }
+    }
+
+    /** RFC 7592 on the stored client, or -1 when there is no registration uri or the request failed. */
+    private int registrationRequest(HTTPRequest.Method method) {
+        CredentialStore.Credentials c = creds();
+        if (StringUtils.isBlank(c.registrationClientUri) || StringUtils.isBlank(c.registrationAccessToken)) {
+            return -1;
+        }
+        try {
+            HTTPRequest r = new HTTPRequest(method, URI.create(c.registrationClientUri).toURL());
+            r.setAuthorization("Bearer " + c.registrationAccessToken);
+            return r.send().getStatusCode();
+        } catch (IOException | RuntimeException ex) {
+            log.debug("Could not reach {} for the client registration: {}", c.registrationClientUri, ex.toString());
+            return -1;
+        }
+    }
+
+    private void forgetRegistration() {
+        CredentialStore.Credentials c = creds();
+        c.clientId = null;
+        c.clientSecret = null;
+        c.redirectUri = null;
+        c.registrationAccessToken = null;
+        c.registrationClientUri = null;
+        try {
+            saveCreds();
+        } catch (IOException ex) {
+            log.warn("Could not clear the client registration for {}", host);
+        }
+    }
+
+    private static String urlEncode(String s) {
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8");
+        } catch (java.io.UnsupportedEncodingException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     // --- flow steps ----------------------------------------------------------------------
@@ -276,6 +371,10 @@ public class OAuth2Client {
             if (parsed.getClientInformation().getSecret() != null) {
                 creds().clientSecret = parsed.getClientInformation().getSecret().getValue();
             }
+            creds().registrationAccessToken = parsed.getClientInformation().getRegistrationAccessToken() == null
+                    ? null : parsed.getClientInformation().getRegistrationAccessToken().getValue();
+            creds().registrationClientUri = parsed.getClientInformation().getRegistrationURI() == null
+                    ? null : parsed.getClientInformation().getRegistrationURI().toString();
         } catch (ParseException ex) {
             throw new IOException("Client registration failed: " + ex.getMessage(), ex);
         }
@@ -308,13 +407,7 @@ public class OAuth2Client {
             discardSession();
             if ("invalid_client".equalsIgnoreCase(ex.code)) {
                 // our registration is gone from the server too, so the next login must re-register
-                creds().clientId = null;
-                creds().redirectUri = null;
-                try {
-                    saveCreds();
-                } catch (IOException ignored) {
-                    log.warn("Could not clear the stale client registration for {}", host);
-                }
+                forgetRegistration();
             }
             throw new NotLoggedInException("The session for " + host + " has expired and could not be renewed ("
                     + ex.getMessage() + "). Run: ksync3 login --oauth", ex);
@@ -495,13 +588,13 @@ public class OAuth2Client {
          * @return the full callback uri including its query, for
          * AuthorizationResponse.parse
          */
-        URI await() throws IOException {
+        URI await(int timeoutSecs) throws IOException {
             try {
-                URI uri = received.poll(BROWSER_TIMEOUT_SECS, TimeUnit.SECONDS);
+                URI uri = received.poll(timeoutSecs, TimeUnit.SECONDS);
                 if (uri == null) {
                     // Nobody finished in the browser. That is a situation, not a fault, so it gets
                     // the one line treatment rather than a stack trace through the option handling.
-                    throw new co.kademi.sync.SetupException("Gave up after " + BROWSER_TIMEOUT_SECS
+                    throw new co.kademi.sync.SetupException("Gave up after " + timeoutSecs
                             + " seconds waiting for the browser. Run the login again when you are ready to approve it.");
                 }
                 return uri;

@@ -52,7 +52,7 @@ public class OAuth2ClientTest {
 
             new Thread(() -> get(redirect + "?code=THECODE&state=THESTATE")).start();
 
-            URI got = cb.await();
+            URI got = cb.await(300);
             Map<String, String> params = OAuth2Client.parseQuery(got.getRawQuery());
             assertEquals("THECODE", params.get("code"));
             assertEquals("THESTATE", params.get("state"));
@@ -64,7 +64,7 @@ public class OAuth2ClientTest {
     public void callbackReceivesADenial() throws Exception {
         try (OAuth2Client.Callback cb = new OAuth2Client.Callback(0)) {
             new Thread(() -> get(cb.redirectUri() + "?error=access_denied&error_description=Denied")).start();
-            Map<String, String> params = OAuth2Client.parseQuery(cb.await().getRawQuery());
+            Map<String, String> params = OAuth2Client.parseQuery(cb.await(300).getRawQuery());
             assertEquals("access_denied", params.get("error"));
         }
     }

@@ -25,6 +25,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -229,6 +230,78 @@ public class OAuth2FlowTest {
 
     // ---------------------------------------------------------------------------------
 
+    @Test
+    public void logoutRevokesTheSessionWhereTheServerOffersIt() throws Exception {
+        server.offerRevocation = true;
+        OAuth2Client oauth = client();
+        oauth.login();
+        String refresh = stored().refreshToken;
+
+        oauth.logout();
+
+        assertTrue(server.revoked.contains(refresh));
+        assertNull(stored().refreshToken);
+    }
+
+    /** KOAuth2 refuses public clients at /revoke today. */
+    @Test
+    public void aRefusedRevocationStillSignsOut() throws Exception {
+        server.offerRevocation = true;
+        server.refuseRevocation = true;
+        OAuth2Client oauth = client();
+        oauth.login();
+
+        oauth.logout();
+
+        assertNull(stored().refreshToken);
+        assertNotNull("kept without RFC 7592", stored().clientId);
+    }
+
+    @Test
+    public void aDeletedClientIsRegisteredAgainBeforeTheBrowserOpens() throws Exception {
+        server.rfc7592 = true;
+        client().login();
+        String first = stored().clientId;
+        server.clients.remove(first);
+
+        client().login();
+
+        assertEquals(2, server.registrationCalls);
+        assertFalse(first.equals(stored().clientId));
+        assertNotNull(stored().accessToken);
+    }
+
+    @Test
+    public void logoutDeletesTheRegistration() throws Exception {
+        server.rfc7592 = true;
+        OAuth2Client oauth = client();
+        oauth.login();
+        String id = stored().clientId;
+
+        oauth.logout();
+
+        assertFalse(server.clients.containsKey(id));
+        assertNull(stored().clientId);
+    }
+
+    /** Without RFC 7592 a deleted client shows up only as a browser that never comes back. */
+    @Test
+    public void aTimedOutLoginForgetsTheClientItReused() throws Exception {
+        client().login();
+        OAuth2Client oauth = client();
+        oauth.browserLauncher = url -> {
+        };
+        oauth.browserTimeoutSecs = 1;
+
+        try {
+            oauth.login();
+            fail("nobody answered in the browser");
+        } catch (co.kademi.sync.SetupException expected) {
+        }
+
+        assertNull(stored().clientId);
+    }
+
     private static class FakeAuthServer {
 
         private final HttpServer http;
@@ -243,6 +316,10 @@ public class OAuth2FlowTest {
         boolean denyAuthorization;
         boolean tamperWithState;
         boolean corruptChallenge;
+        boolean offerRevocation;
+        boolean refuseRevocation;
+        boolean rfc7592;
+        final java.util.List<String> revoked = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         FakeAuthServer() throws IOException {
             http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -282,6 +359,10 @@ public class OAuth2FlowTest {
                 authorize(ex);
             } else if (path.equals("/_oauth2/token")) {
                 token(ex);
+            } else if (path.equals("/_oauth2/revoke")) {
+                revoke(ex);
+            } else if (path.startsWith("/_oauth2/register/")) {
+                manageClient(ex, path.substring("/_oauth2/register/".length()));
             } else {
                 protectedResource(ex);
             }
@@ -293,6 +374,7 @@ public class OAuth2FlowTest {
                     + "\"authorization_endpoint\":\"" + baseUrl() + "/_oauth2/authorize\","
                     + "\"token_endpoint\":\"" + baseUrl() + "/_oauth2/token\","
                     + "\"registration_endpoint\":\"" + baseUrl() + "/_oauth2/register\","
+                    + (offerRevocation ? "\"revocation_endpoint\":\"" + baseUrl() + "/_oauth2/revoke\"," : "")
                     + "\"code_challenge_methods_supported\":[\"S256\"]}");
         }
 
@@ -309,7 +391,9 @@ public class OAuth2FlowTest {
             registeredAuthMethod = body.optString("token_endpoint_auth_method");
             String clientId = UUID.randomUUID().toString();
             clients.put(clientId, redirectUri);
-            send(ex, 200, "{\"client_id\":\"" + clientId + "\",\"token_endpoint_auth_method\":\"" + registeredAuthMethod + "\"}");
+            String management = rfc7592 ? ",\"registration_access_token\":\"rat-" + clientId + "\",\"registration_client_uri\":\""
+                    + baseUrl() + "/_oauth2/register/" + clientId + "\"" : "";
+            send(ex, 200, "{\"client_id\":\"" + clientId + "\",\"token_endpoint_auth_method\":\"" + registeredAuthMethod + "\"" + management + "}");
         }
 
         private void authorize(HttpExchange ex) throws IOException {
@@ -375,6 +459,32 @@ public class OAuth2FlowTest {
             refreshTokens.put(refresh, access);
             send(ex, 200, "{\"access_token\":\"" + access + "\",\"token_type\":\"Bearer\","
                     + "\"expires_in\":3600,\"refresh_token\":\"" + refresh + "\",\"scope\":\"profile\"}");
+        }
+
+        private void revoke(HttpExchange ex) throws IOException {
+            Map<String, String> form = OAuth2Client.parseQuery(read(ex));
+            if (refuseRevocation || !clients.containsKey(form.get("client_id"))) {
+                send(ex, 400, "{\"error\":\"invalid_client\"}");
+                return;
+            }
+            revoked.add(form.get("token"));
+            refreshTokens.remove(form.get("token"));
+            send(ex, 200, "");
+        }
+
+        private void manageClient(HttpExchange ex, String clientId) throws IOException {
+            drain(ex);
+            if (!clients.containsKey(clientId) || !("Bearer rat-" + clientId).equals(ex.getRequestHeaders().getFirst("Authorization"))) {
+                send(ex, 401, "{\"error\":\"invalid_token\"}");
+                return;
+            }
+            if ("DELETE".equals(ex.getRequestMethod())) {
+                clients.remove(clientId);
+                ex.sendResponseHeaders(204, -1);
+                ex.close();
+                return;
+            }
+            send(ex, 200, "{\"client_id\":\"" + clientId + "\"}");
         }
 
         private void protectedResource(HttpExchange ex) throws IOException {
