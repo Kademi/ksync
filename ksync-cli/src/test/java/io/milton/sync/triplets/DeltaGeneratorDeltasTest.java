@@ -152,6 +152,17 @@ public class DeltaGeneratorDeltasTest {
         assertEquals(Arrays.asList("updated /a.txt"), run(store, base, target, working).events);
     }
 
+    /** Added on both sides with different content: overwriting the local one lost it. */
+    @Test
+    public void testAddedOnBothSidesIsAConflict() throws Exception {
+        MemoryBlobStore store = new MemoryBlobStore();
+        String base = dir(store);
+        String target = dir(store, new T("a.txt", H_A, "f"), new T("same.txt", H_C, "f"));
+        String working = dir(store, new T("a.txt", H_B, "f"), new T("same.txt", H_C, "f"));
+
+        assertEquals(Arrays.asList("conflict /a.txt"), run(store, base, target, working).events);
+    }
+
     @Test
     public void testCreatesAndDeletes() throws Exception {
         MemoryBlobStore store = new MemoryBlobStore();

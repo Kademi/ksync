@@ -108,7 +108,11 @@ public class DeltaGenerator {
                 }
 
                 if (triplet1 == null) {
-                    deltaListener.doCreated(path, triplet2);
+                    if (tripletWorkingHash == null || triplet2.getType().equals("d")) {
+                        deltaListener.doCreated(path, triplet2);
+                    } else if (!triplet2.getHash().equals(tripletWorkingHash)) {
+                        deltaListener.doConflict(path, triplet2); // added on both sides
+                    }
                 } else if (triplet1.getHash().equals(triplet2.getHash())) {
                     // Identical, and for a directory that means every descendant is
                     // identical too - the hash covers the whole subtree, which is the
