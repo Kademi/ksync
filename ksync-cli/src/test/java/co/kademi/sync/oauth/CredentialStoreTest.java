@@ -53,6 +53,27 @@ public class CredentialStoreTest {
         assertEquals(Arrays.asList("profile"), got.scopes);
     }
 
+    /** The file is shared with ksync-go, which may add keys ksync3 has never heard of. */
+    @Test
+    public void keysKsync3DoesNotOwnSurviveItsSave() throws Exception {
+        Files.createDirectories(path.getParent());
+        Files.write(path, ("{\"acme.kademi.com\": {\"client_id\": \"c\", \"access_token\": \"old\","
+                + " \"refresh_token\": \"r\", \"device_id\": \"go-1\"},"
+                + " \"other.kademi.com\": {\"client_id\": \"o\", \"future\": {\"a\": 1}}}").getBytes(StandardCharsets.UTF_8));
+
+        CredentialStore.Credentials c = store.get("acme.kademi.com");
+        c.accessToken = "new";
+        c.refreshToken = null;
+        store.put("acme.kademi.com", c);
+
+        net.sf.json.JSONObject json = net.sf.json.JSONObject.fromObject(new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+        net.sf.json.JSONObject acme = json.getJSONObject("acme.kademi.com");
+        assertEquals("go-1", acme.getString("device_id"));
+        assertEquals("new", acme.getString("access_token"));
+        assertFalse("a key ksync3 cleared stays cleared", acme.containsKey("refresh_token"));
+        assertEquals(1, json.getJSONObject("other.kademi.com").getJSONObject("future").getInt("a"));
+    }
+
     @Test
     public void missingHostReturnsNull() throws Exception {
         assertNull(store.get("nothing.kademi.com"));

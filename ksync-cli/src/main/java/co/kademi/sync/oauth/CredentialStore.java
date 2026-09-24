@@ -271,10 +271,21 @@ public class CredentialStore {
         /**
          * The older cookie login: the miltonUserUrl and miltonUserUrlHash values ksync scrapes
          * off a login response. Kept here rather than in the checkout for the same reason as the
-         * tokens. Not written by ksync-go, which ignores fields it does not know.
+         * tokens. Not written by ksync-go, which keeps whatever keys it does not own.
          */
         public String userUrl;
         public String userUrlHash;
+        /** RFC 7592, when the server returns them from registration. */
+        public String registrationAccessToken;
+        public String registrationClientUri;
+
+        /** Keys ksync3 does not own, written back as read, since ksync-go shares this file. */
+        private final JSONObject others = new JSONObject();
+
+        private static final java.util.Set<String> KNOWN = new java.util.HashSet<>(java.util.Arrays.asList(
+                "client_id", "client_secret", "access_token", "refresh_token", "expires_at", "scopes",
+                "token_endpoint", "redirect_uri", "user_url", "user_url_hash",
+                "registration_access_token", "registration_client_uri"));
 
         /**
          * @return true if someone is signed in here, by either route. Distinct from
@@ -303,6 +314,8 @@ public class CredentialStore {
             c.redirectUri = optString(json, "redirect_uri");
             c.userUrl = optString(json, "user_url");
             c.userUrlHash = optString(json, "user_url_hash");
+            c.registrationAccessToken = optString(json, "registration_access_token");
+            c.registrationClientUri = optString(json, "registration_client_uri");
             String expires = optString(json, "expires_at");
             if (StringUtils.isNotBlank(expires)) {
                 try {
@@ -322,11 +335,18 @@ public class CredentialStore {
                     c.scopes.add(arr.getString(i));
                 }
             }
+            for (Object key : json.keySet()) {
+                if (!KNOWN.contains(String.valueOf(key))) {
+                    c.others.put(key, json.get(key));
+                }
+            }
             return c;
         }
 
         JSONObject toJson() {
+            // Only keys ksync3 does not own, so clearing one of its own can never bring it back
             JSONObject json = new JSONObject();
+            json.putAll(others);
             json.put("client_id", StringUtils.defaultString(clientId));
             if (StringUtils.isNotBlank(clientSecret)) {
                 json.put("client_secret", clientSecret);
@@ -352,6 +372,12 @@ public class CredentialStore {
             }
             if (StringUtils.isNotBlank(userUrlHash)) {
                 json.put("user_url_hash", userUrlHash);
+            }
+            if (StringUtils.isNotBlank(registrationAccessToken)) {
+                json.put("registration_access_token", registrationAccessToken);
+            }
+            if (StringUtils.isNotBlank(registrationClientUri)) {
+                json.put("registration_client_uri", registrationClientUri);
             }
             return json;
         }
