@@ -64,10 +64,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 import java.util.concurrent.TimeUnit;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
@@ -91,8 +89,8 @@ import org.hashsplit4j.api.Combiner;
 import org.hashsplit4j.api.Fanout;
 import org.hashsplit4j.api.HashCache;
 import org.hashsplit4j.api.HashStore;
-import org.hashsplit4j.store.FileSystem2BlobStore;
-import org.hashsplit4j.store.FileSystem2HashStore;
+import org.hashsplit4j.store.MemoryBlobStore;
+import org.hashsplit4j.store.MemoryHashStore;
 import org.hashsplit4j.store.MultipleBlobStore;
 import org.hashsplit4j.store.MultipleHashStore;
 import org.hashsplit4j.triplets.HashCalc;
@@ -259,7 +257,10 @@ public class KSync3 {
      * @param oauth a stored OAuth2 session, or null
      */
     static Host newClient(String sRemoteAddress, String user, String pwd, Map<String, String> cookies, OAuth2Client oauth) throws MalformedURLException {
-        int timeout = 180000;
+        return newClient(sRemoteAddress, user, pwd, cookies, oauth, 180000);
+    }
+
+    static Host newClient(String sRemoteAddress, String user, String pwd, Map<String, String> cookies, OAuth2Client oauth, int timeout) throws MalformedURLException {
         URL url = new URL(sRemoteAddress);
         Host client;
         if (oauth != null) {
@@ -282,6 +283,23 @@ public class KSync3 {
             client.getCookies().putAll(cookies);
         }
         return client;
+    }
+
+    /** The file hash cache, trusted only while the store still has the file's objects. */
+    static SyncHashCache storedOnly(SyncHashCache cache, HashStore store) {
+        return new SyncHashCache() {
+            @Override
+            public String get(File file) {
+                String hash = cache.get(file);
+                // ponytail: the file fanout only, so a dropped blob under it is not re-parsed; walk the fanouts if that bites
+                return hash != null && store.hasFile(hash) ? hash : null;
+            }
+
+            @Override
+            public void put(File file, String hash) {
+                cache.put(file, hash);
+            }
+        };
     }
 
     /**
@@ -385,18 +403,7 @@ public class KSync3 {
             // Signing in is about a site, not about this directory: the credentials go to the
             // per-user store either way. Creating a .ksync here would leave what looks like a
             // checkout in whatever folder someone happened to be standing in.
-            File repoDir = new File(dir, ".ksync");
-
-            if (cmd.oauth()) {
-                KSyncUtils.newOAuth2Client(cmd.url).login();
-                return;
-            }
-
-            String user = KSync3Utils.resolve(cmd.user(), "user", KSyncUtils.USER_PROMPT);
-            String pwd = KSync3Utils.getPassword(cmd.password(), user, cmd.url);
-
-            KSync3 kSync3 = new KSync3(dir, cmd.url, user, pwd, repoDir, false, null, null);
-            kSync3.login(null);
+            signIn(dir, new File(dir, ".ksync"), cmd.url, KSyncUtils.siteUrl(cmd.url), cmd.user(), cmd.password(), cmd.oauth());
         }, cmd);
     }
 
@@ -510,7 +517,7 @@ public class KSync3 {
             if (login != null) {
                 log.info("Already signed in to {} with {}", site, login);
             } else {
-                user = signIn(dir, configDir, url, site, cmd);
+                user = signIn(dir, configDir, url, site, cmd.user(), cmd.password(), cmd.oauth());
                 if (user == null && storedLogin(url) == null) {
                     exit[0] = 1;
                     return;
@@ -598,14 +605,14 @@ public class KSync3 {
      * @return the username signed in as, or null - which is not a failure on its own, because an
      * OAuth2 login knows the site rather than the name
      */
-    private static String signIn(File dir, File configDir, String url, String site, InitCommand cmd) throws Exception {
-        if (cmd.user() == null) {
+    private static String signIn(File dir, File configDir, String url, String site, String givenUser, String givenPassword, boolean browserOnly) throws Exception {
+        if (givenUser == null) {
             try {
                 KSyncUtils.newOAuth2Client(url).login();
                 log.info("Signed in to {}", site);
                 return null;
             } catch (IOException | RuntimeException ex) {
-                if (cmd.oauth()) {
+                if (browserOnly) {
                     throw new SetupException("Could not sign in to " + site + " with a browser: "
                             + rootCauseMessage(ex), ex);
                 }
@@ -613,10 +620,10 @@ public class KSync3 {
                 log.info("Falling back to a username and password");
             }
         }
-        String user = KSync3Utils.resolve(cmd.user(), "user", KSyncUtils.USER_PROMPT);
-        String pwd = KSync3Utils.getPassword(cmd.password(), user, url);
-        new KSync3(dir, url, user, pwd, configDir, false, null, null).login(null);
-        if (storedLogin(url) == null) {
+        String user = KSync3Utils.resolve(givenUser, "user", KSyncUtils.USER_PROMPT);
+        String pwd = KSync3Utils.getPassword(givenPassword, user, url);
+        // Not storedLogin: login runs with a session already stored, which would pass for this password working
+        if (!new KSync3(dir, url, user, pwd, configDir, false, null, null).login(null)) {
             log.error("Could not sign in to {} as {}, so nothing has been set up here", site, user);
             return null;
         }
@@ -661,6 +668,7 @@ public class KSync3 {
         log.debug("Branch {} is at {}", versionUrl, hash);
 
         configDir.mkdirs();
+        ObjectStoreDir.hideFromTools(configDir);
         KSyncUtils.writeProps(versionUrl, user, repoUrl, configDir);
         log.info("{} now syncs with {}", dir.getAbsolutePath(), versionUrl);
         if (repoUrl != null) {
@@ -735,15 +743,7 @@ public class KSync3 {
         System.exit(0); // threads arent shutting down
     }
 
-    /**
-     * Asks the server which files in this version are missing objects, and
-     * reports them.
-     *
-     * Exits 1 when anything is missing, so a script or an assistant can act on
-     * the answer without reading the output. This reports a fault in the
-     * version, not a fault in the command, so it has to be distinguishable from
-     * a clean check.
-     */
+    /** Uploads any missing objects this checkout has, then lists the rest, exiting 1 if there are any. */
     public static void verify(VerifyCommand cmd) throws Exception {
         int[] missing = new int[]{0};
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
@@ -755,6 +755,14 @@ public class KSync3 {
     private final File localDir;
     private final EventManager eventManager;
     private final Host client;
+    private final Host slowClient;
+    private final boolean background;
+    private final ExecutorService checker = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "ksync-check");
+        t.setDaemon(true);
+        return t;
+    });
+    private final java.util.concurrent.atomic.AtomicBoolean checkQueued = new java.util.concurrent.atomic.AtomicBoolean();
     private final MemoryLocalTripletStore tripletStore;
     private final HttpBlobStore httpBlobStore;
     private final HttpHashStore httpHashStore;
@@ -766,11 +774,6 @@ public class KSync3 {
 
     private final HashCalc hashCalc = HashCalc.getInstance();
     private final String branchPath;
-    private final Counter transferQueueCounter = new Counter();
-
-    private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(1000);
-    private final CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
-    private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 10, 5, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
     private final File repoDir;
     private final File configDir;
     private final Ignores ignores;
@@ -778,7 +781,7 @@ public class KSync3 {
     private final FileSystemWatchingService fileSystemWatchingService;
     private final ScheduledExecutorService scheduledExecutorService;
 
-    private final List<String> errors = new ArrayList<>();
+    private final List<String> errors = java.util.Collections.synchronizedList(new ArrayList<>());
 
     /**
      * The url of the version being synced, which is what every request here is
@@ -833,6 +836,9 @@ public class KSync3 {
         eventManager = new EventManagerImpl();
 
         client = newClient(sRemoteAddress, user, pwd, cookies, oauth);
+        // The server's missing object walk says nothing until it is done, about 4 minutes for 12k files
+        slowClient = newClient(sRemoteAddress, user, pwd, cookies, oauth, 30 * 60 * 1000);
+        this.background = background;
 
         // Which version to work against. Only now, because asking the repository needs the client,
         // and everything below is relative to the answer.
@@ -851,19 +857,21 @@ public class KSync3 {
 
         repoDir = new File(localDir, ".ksync");
 
-        // Keyed on the repository when following one, not on the version, so two checkouts of one
-        // repository share their objects instead of each fetching the same blob. The file hash
-        // cache below is keyed the same way, for the same reason.
+        // Keyed on the repository when following one, as the old shared store and the file hash cache are
         String cacheKey = trackedRepoUrl == null ? remoteAddress : trackedRepoUrl;
 
-        // Not under the checkout: both stores fan a hash out over nested directories, one small
-        // file per object, and tens of thousands of them inside the folder being worked in are
-        // indexed by editors and copied by other sync tools. Checkouts made before this moved
-        // bring theirs with them.
-        File objectsDir = ObjectStoreDir.forRepo(cacheKey);
-        ObjectStoreDir.migrate(repoDir, objectsDir);
-        this.localBlobStore = new FileSystem2BlobStore(new File(objectsDir, ObjectStoreDir.BLOBS));
-        this.localHashStore = new FileSystem2HashStore(new File(objectsDir, ObjectStoreDir.HASHES));
+        // Only when .ksync exists: login builds one of these too, and must not leave a checkout behind
+        if (repoDir.isDirectory()) {
+            ObjectStoreDir.hideFromTools(repoDir);
+            PackStore packs = PackStore.open(new File(repoDir, PackStore.DIR));
+            ObjectStoreDir.migrate(packs, repoDir, cacheKey);
+            this.localBlobStore = packs;
+            this.localHashStore = packs;
+        } else {
+            // Never read or written: login is the one command that builds this outside a checkout
+            this.localBlobStore = new MemoryBlobStore();
+            this.localHashStore = new MemoryHashStore();
+        }
 
         // The bloom filters tell us what the server already has, and each one costs the server a full walk of the
         // repository to produce, so they are built on first use rather than eagerly here. A checkout that gets a pack
@@ -904,9 +912,7 @@ public class KSync3 {
         }
 
         File tmpDir = new File(System.getProperty("java.io.tmpdir"));
-        // Same key as the object store above: the cache is about local files, so it stays valid
-        // across a version change, and rebuilding it on every release would be a slow scan of the
-        // whole checkout for nothing.
+        // Keyed on the repository: the cache is about local files, so it survives a version change
         File envDir = new File(tmpDir, "appDeployer-filecache-" + KSync3Utils.makeFileName(cacheKey));
         try {
             fileHashCache = new BerkeleyDbFileHashCache(envDir);
@@ -932,7 +938,7 @@ public class KSync3 {
                     pushFailed(ex);
                 }
             }
-        }, null, fileSystemWatchingService, ignores, fileHashCache);
+        }, null, fileSystemWatchingService, ignores, storedOnly(fileHashCache, localHashStore));
 //        MemoryLocalTripletStore s = new MemoryLocalTripletStore(localRootDir, new EventManagerImpl(), blobStore, hashStore, (String rootHash) -> {
 //            needsPush.set(true);
 //        }, null, fileWatchService, null, fileHashCache);
@@ -1103,9 +1109,10 @@ public class KSync3 {
      * the password.
      *
      * @param secondFactor a 2FA code, or null on the first attempt
+     * @return whether a session was stored
      */
-    private void login(String secondFactor) {
-        login(secondFactor, true);
+    private boolean login(String secondFactor) {
+        return login(secondFactor, true);
     }
 
     /**
@@ -1115,8 +1122,9 @@ public class KSync3 {
      * run from cron or a desktop launcher has nobody to answer, and would sit
      * on a stdin that never produces a line
      */
-    private void login(String secondFactor, boolean mayAskFor2FA) {
+    private boolean login(String secondFactor, boolean mayAskFor2FA) {
         log.debug("login");
+        boolean stored = false;
 
         HttpClient hc = this.client.getClient();
         HttpPost m = new HttpPost(this.client.baseHref());
@@ -1146,7 +1154,7 @@ public class KSync3 {
                     log.info("Authentication failed. Is 2FA required?");
                     String s = KSync3Utils.getInput("2FA code");
                     if (StringUtils.isNotBlank(s)) {
-                        login(s, mayAskFor2FA);
+                        stored = login(s, mayAskFor2FA);
                     } else {
                         log.info("Login aborted");
                     }
@@ -1161,6 +1169,7 @@ public class KSync3 {
                         log.warn("Login seemed to succeed, but didnt find an authorisation cookie");
                     } else {
                         KSyncUtils.writeLoginProps("/users/" + this.client.user + "/", userUrlHash, this.remoteAddress);
+                        stored = true;
                     }
                     break;
 
@@ -1177,6 +1186,7 @@ public class KSync3 {
             }
             log.error("login: exception occured", ex);
         }
+        return stored;
     }
 
     /**
@@ -1290,12 +1300,15 @@ public class KSync3 {
         status.hashes(localRootHash, remoteHash);
         if (remoteHash.equals(localRootHash)) {
             log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
+            // A push whose reply was lost still committed
+            KSyncUtils.saveRemoteHash(configDir, remoteHash);
             status.state(SyncState.IDLE, "nothing to push");
             return;
         }
 
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
-        if (!remoteHash.equals(lastRemoteHash)) {
+        // An empty version answers "null", which a checkout records as no hash at all
+        if (!java.util.Objects.equals("null".equals(remoteHash) ? null : remoteHash, lastRemoteHash)) {
             if (!localWins) {
                 log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
                 status.problem(SyncState.BLOCKED, "The remote has changed. Pull, or use -localwins to overwrite it");
@@ -1311,203 +1324,84 @@ public class KSync3 {
             status.state(SyncState.PUSHING, "overwriting a changed remote");
         }
 
-        // walk the VFS and push hashes and blobs to the remote store. Anything
-        // already in the remote store will be ignored
         status.state(SyncState.PUSHING, "uploading changed files");
-        walkLocalVfs(localRootHash, httpBlobStore, httpHashStore, Path.root);
-
-        // wait for threads to complete
-        log.debug("Wait for push transfers to complete..");
-        while (transferQueueCounter.count > 0) {
-            Thread.sleep(300);
+        if (!sendChanges(localRootHash, lastRemoteHash)) {
+            return;
         }
-        log.info("Push complete");
 
-        // Now set the hash on the repo, and check for any missing objects
         Map<String, String> params = new HashMap<>();
         params.put("newHash", localRootHash);
-        params.put("validate", "true");
+        // validate=true walks the whole version inside the request, minutes on a big one; the check runs after instead
+        params.put("validate", "false");
         try {
             log.debug("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
             String res = client.post(branchPath, params);
-            JSONObject jsonRes = JSONObject.fromObject(res);
-            Object statusOb = jsonRes.get("status");
-            if (statusOb != null) {
-                Boolean st = (Boolean) statusOb;
-                if (st) {
-                    KSyncUtils.saveRemoteHash(configDir, localRootHash);
-                    log.info("Completed ok");
-                    status.hashes(localRootHash, localRootHash);
-                    status.errorCount(errors.size());
+            if (!Boolean.TRUE.equals(JSONObject.fromObject(res).get("status"))) {
+                log.warn("The server did not take the new hash: {}", res);
+                status.problem(SyncState.FAILED, "The server did not take the new hash");
+                return;
+            }
+            KSyncUtils.saveRemoteHash(configDir, localRootHash);
+            status.hashes(localRootHash, localRootHash);
+            log.info("Pushed {}", localRootHash);
+            if (background) {
+                status.state(SyncState.IDLE, "pushed");
+                checkServerHasEverythingLater();
+            } else {
+                status.state(SyncState.PUSHING, "checking the server has everything");
+                if (completeOnServer()) {
                     status.state(SyncState.IDLE, "pushed");
-                    return;
                 }
             }
-            log.warn("Push failed: Check for missing objects", res);
-            status.state(SyncState.PUSHING, "uploading objects the server was missing");
-            // todo: check status
-            Object dataOb = jsonRes.get("data");
-            log.debug("Push failure payload: {}", dataOb);
-            JSONObject data = (JSONObject) dataOb;
-            JSONArray missingChunksArr = (JSONArray) data.get("missingChunkFanouts");
-
-            JSONArray missingBlobsArr = (JSONArray) data.get("missingBlobs");
-            KSyncUtils.processHashes(missingBlobsArr, (String hash) -> {
-                byte[] arr = localBlobStore.getBlob(hash);
-                log.debug("Upload missing blob {} size={} to blobstore={}", hash, arr.length, httpBlobStore);
-                try {
-                    httpBlobStore.setForce(true);
-                    httpBlobStore.setBlob(hash, arr);
-                } finally {
-                    httpBlobStore.setForce(false);
-                }
-            });
-
-            KSyncUtils.processHashes(missingChunksArr, (String hash) -> {
-                log.debug("Upload missing chunk fanout {}", hash);
-                Fanout fanout = localHashStore.getChunkFanout(hash);
-                try {
-                    httpHashStore.setForce(true);
-                    httpHashStore.setChunkFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
-                } finally {
-                    httpHashStore.setForce(false);
-                }
-            });
-
-            JSONArray missingFileFanoutsArr = (JSONArray) data.get("missingFileFanouts");
-            KSyncUtils.processHashes(missingFileFanoutsArr, (String hash) -> {
-                log.debug("Upload missing file fanout {}", hash);
-                Fanout fanout = localHashStore.getFileFanout(hash);
-                try {
-                    httpHashStore.setForce(true);
-                    httpHashStore.setFileFanout(hash, fanout.getHashes(), fanout.getActualContentLength());
-                } finally {
-                    httpHashStore.setForce(false);
-                }
-            });
-
-            push(localRootHash, configDir);
-
-            KSyncUtils.saveRemoteHash(configDir, localRootHash);
-
+            status.errorCount(errors.size());
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
             log.error("Exception setting hash", ex);
             status.problem(SyncState.FAILED, "Could not set the repository hash: " + ex.getMessage());
         }
     }
 
-    private void walkLocalVfs(String dirHash, BlobStore httpBlobStore, HashStore httpHashStore, Path p) throws IOException, InterruptedException {
-        //log.info("walk local vfs: {}", p);
-        byte[] dirListBlob = localBlobStore.getBlob(dirHash);
-        if (!httpBlobStore.hasBlob(dirHash)) {
-            log.debug("Push directory list for {}", p);
-            //httpBlobStore.setBlob(dirHash, dirListBlob);
-            transferQueueCounter.up();
-            transferExecutor.submit(() -> {
-                long tm = System.currentTimeMillis();
-                //System.out.println("upload " + dirHash);
-                httpBlobStore.setBlob(dirHash, dirListBlob);
-                transferQueueCounter.down();
-                //System.out.println("done upload " + dirHash);
-                tm = System.currentTimeMillis() - tm;
-                log.debug("Transferred blob in {} ms", tm);
-            });
-        }
-
-        List<ITriplet> triplets = hashCalc.parseTriplets(new ByteArrayInputStream(dirListBlob));
-        for (ITriplet triplet : triplets) {
-            if (triplet.getType().equals("d")) {
-                walkLocalVfs(triplet.getHash(), httpBlobStore, httpHashStore, p.child(triplet.getName()));
-            } else {
-                //log.info("Upload file: {}", triplet.getName());
-                combineToRemote(p.child(triplet.getName()), triplet.getHash());
+    /** @return false if the push cannot go on, with the reason on the status */
+    private boolean sendChanges(String localRootHash, String lastRemoteHash) throws IOException {
+        BulkPush bulk = new BulkPush(localBlobStore, localHashStore, (path, zip) -> {
+            HttpResult r = client.doPut(path, zip, "application/zip");
+            if (r.getStatusCode() < 200 || r.getStatusCode() > 299) {
+                throw new IOException("The server answered " + r.getStatusCode() + " to a bulk upload to " + path);
             }
+        });
+        try {
+            bulk.send(localRootHash, lastRemoteHash);
+        } catch (IOException ex) {
+            log.error("Bulk upload failed", ex);
+            status.problem(SyncState.FAILED, "Could not upload changes: " + ex.getMessage());
+            return false;
         }
+        if (!bulk.getMissing().isEmpty()) {
+            log.error("Not pushing: this checkout is missing {} objects of its own tree, eg {}", bulk.getMissing().size(), bulk.getMissing().iterator().next());
+            status.problem(SyncState.FAILED, "This checkout is missing " + bulk.getMissing().size() + " objects of its own files. Edit or touch the affected files and push again");
+            return false;
+        }
+        log.info("Push complete: {} changed files, {} blobs, {} bytes", bulk.getFileCount(), bulk.blobsSent, bulk.bytesSent);
+        return true;
     }
 
-    public void combineToRemote(Path filePath, String fileHash) throws InterruptedException {
-        combine(filePath.toString(), fileHash, this.httpHashStore, this.httpBlobStore, localHashStore, localBlobStore, false);
-    }
-
-    public void combineToLocal(Path filePath, String fileHash) throws InterruptedException {
-        combine(filePath.toString(), fileHash, localHashStore, localBlobStore, this.wrappedHashStore, this.wrappedBlobStore, true);
-    }
-
-    /**
-     * Copies a file's fanouts and blobs from one pair of stores to another.
-     *
-     * @param synchronous when true the writes happen on this thread. Writing to
-     * the remote is done on the transfer executor so uploads overlap, and the
-     * file fanout must not be set until they finish, which is what the wait
-     * below is for. Writing to the local stores is just disk IO - the expensive
-     * part, fetching from the source, has already happened on this thread - so
-     * queueing it buys nothing and the wait would cost a second per file.
-     */
-    private void combine(String filePath, String fileHash, HashStore destHashStore, BlobStore destBlobStore, HashStore sourceHashStore, BlobStore sourceBlobStore, boolean synchronous) throws InterruptedException {
-        if (destHashStore.hasFile(fileHash)) {
+    public void combineToLocal(Path filePath, String fileHash) {
+        if (localHashStore.hasFile(fileHash)) {
             return;
         }
-        //log.info("Copy file {}", filePath);
-        Fanout ff = null;
         try {
-            ff = sourceHashStore.getFileFanout(fileHash);
-
-            Fanout fileFanout = ff;
-
-            final Counter c = new Counter();
+            Fanout fileFanout = wrappedHashStore.getFileFanout(fileHash);
             for (String fanoutHash : fileFanout.getHashes()) {
-                Fanout fanout = sourceHashStore.getChunkFanout(fanoutHash);
-                List<String> hashes = fanout.getHashes();
-                for (String hash : hashes) {
-                    if (!destBlobStore.hasBlob(hash)) {
-                        byte[] arr = sourceBlobStore.getBlob(hash);
-                        if (synchronous) {
-                            destBlobStore.setBlob(hash, arr);
-                        } else {
-                            c.up();
-                            transferQueueCounter.up();
-                            transferExecutor.submit(() -> {
-                                log.debug("transfer blob for file {} with size {} bytes", filePath, arr.length);
-                                destBlobStore.setBlob(hash, arr);
-                                c.down();
-                                transferQueueCounter.down();
-                            });
-                        }
+                Fanout fanout = wrappedHashStore.getChunkFanout(fanoutHash);
+                for (String hash : fanout.getHashes()) {
+                    if (!localBlobStore.hasBlob(hash)) {
+                        localBlobStore.setBlob(hash, wrappedBlobStore.getBlob(hash));
                     }
                 }
-
-                if (!destHashStore.hasChunk(fanoutHash)) {
-                    if (synchronous) {
-                        destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
-                    } else {
-                        c.up();
-                        transferQueueCounter.up();
-                        transferExecutor.submit(() -> {
-                            log.debug("Transfer chunk for file {}", filePath);
-                            destHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
-                            c.down();
-                            transferQueueCounter.down();
-                        });
-                    }
+                if (!localHashStore.hasChunk(fanoutHash)) {
+                    localHashStore.setChunkFanout(fanoutHash, fanout.getHashes(), fanout.getActualContentLength());
                 }
             }
-
-            if (!destHashStore.hasFile(fileHash)) {
-                if (synchronous) {
-                    destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
-                } else {
-                    // wait for jobs to complete, we dont want to set the file hash until everything inside the file is uploaded
-                    log.debug("Waiting for transfers to complete");
-                    while (c.count > 0) {
-                        Thread.sleep(1000);
-                    }
-                    transferQueueCounter.up();
-                    transferExecutor.submit(() -> {
-                        destHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
-                        transferQueueCounter.down();
-                    });
-                }
-            }
+            localHashStore.setFileFanout(fileHash, fileFanout.getHashes(), fileFanout.getActualContentLength());
         } catch (Exception e) {
             String errMsg = "Could not retrieve file " + filePath + " because " + e.getMessage();
             errors.add(errMsg);
@@ -1592,20 +1486,117 @@ public class KSync3 {
      */
     private int verify() throws IOException {
         log.info("Checking {} for missing objects, this walks the whole version..", remoteAddress);
-        Map<String, String> params = new HashMap<>();
-        params.put("findMissingObjects", "true");
-        String res;
-        try {
-            res = client.post(branchPath, params);
-        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
-            throw new IOException("Could not run the missing object check: " + ex.getMessage(), ex);
-        }
-        MissingObjects missing = MissingObjects.parse(res);
+        MissingObjects missing = uploadUntilComplete(findMissing());
         log.info("");
         for (String reportLine : missing.report()) {
             log.info(reportLine);
         }
         return missing.getObjects().size();
+    }
+
+    /** What the server says this version is missing, from a walk of the whole version. */
+    private MissingObjects findMissing() throws IOException {
+        Map<String, String> params = new HashMap<>();
+        params.put("findMissingObjects", "true");
+        try {
+            slowClient.getCookies().putAll(client.getCookies()); // a login during this run
+            return MissingObjects.parse(slowClient.post(branchPath, params));
+        } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
+            throw new IOException("Could not run the missing object check: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** One check at a time, and saves in a burst share the one queued behind it. */
+    private void checkServerHasEverythingLater() {
+        if (checkQueued.compareAndSet(false, true)) {
+            checker.submit(() -> {
+                checkQueued.set(false);
+                completeOnServer();
+            });
+        }
+    }
+
+    /** @return false if the server is still missing objects, with the reason on the status */
+    private boolean completeOnServer() {
+        log.info("Checking the server has everything for this version, which walks the whole version..");
+        try {
+            MissingObjects missing = uploadUntilComplete(findMissing());
+            if (missing.isEmpty()) {
+                log.info("The server has everything");
+                return true;
+            }
+            for (String reportLine : missing.report()) {
+                log.warn(reportLine);
+            }
+            status.problem(SyncState.FAILED, "The server is missing " + missing.getObjects().size()
+                    + " objects for this version, and this checkout does not have them either");
+            return false;
+        } catch (SetupException ex) {
+            log.warn("This server cannot check a version for missing objects: {}", ex.getMessage());
+        } catch (IOException | RuntimeException ex) {
+            log.warn("Pushed, but could not check the server has everything. Run: ksync3 verify", ex);
+        }
+        return true;
+    }
+
+    /** Repeats, because the walk cannot see below a missing directory listing until it is sent. */
+    private MissingObjects uploadUntilComplete(MissingObjects missing) throws IOException {
+        for (int round = 0; !missing.isEmpty() && round < 100; round++) {
+            int n = missing.getObjects().size();
+            log.info("The server is missing {} {}, uploading what this checkout has", n, n == 1 ? "object" : "objects");
+            if (upload(missing) == n) {
+                break; // none of them are here
+            }
+            missing = findMissing();
+        }
+        return missing;
+    }
+
+    /** Forced past the bloom filters, which can say the server has what it lacks. @return how many were not here */
+    private int upload(MissingObjects missing) {
+        int notHere = 0;
+        httpBlobStore.setForce(true);
+        httpHashStore.setForce(true);
+        try {
+            for (MissingObjects.MissingObject o : missing.getObjects()) {
+                String h = o.getHash();
+                switch (o.getType()) {
+                    case MissingObjects.TYPE_FILE_FANOUT: {
+                        Fanout f = localHashStore.getFileFanout(h);
+                        if (f == null) {
+                            notHere++;
+                        } else {
+                            httpHashStore.setFileFanout(h, f.getHashes(), f.getActualContentLength());
+                        }
+                        break;
+                    }
+                    case MissingObjects.TYPE_CHUNK_FANOUT: {
+                        Fanout f = localHashStore.getChunkFanout(h);
+                        if (f == null) {
+                            notHere++;
+                        } else {
+                            httpHashStore.setChunkFanout(h, f.getHashes(), f.getActualContentLength());
+                        }
+                        break;
+                    }
+                    default: {
+                        byte[] b = localBlobStore.getBlob(h);
+                        if (b == null) {
+                            notHere++;
+                        } else {
+                            httpBlobStore.setBlob(h, b);
+                        }
+                    }
+                }
+            }
+        } finally {
+            httpBlobStore.setForce(false);
+            httpHashStore.setForce(false);
+        }
+        if (notHere > 0) {
+            errors.add(notHere + " objects the server is missing are not in this checkout either");
+        }
+        return notHere;
     }
 
     /**
@@ -1623,7 +1614,8 @@ public class KSync3 {
                 return null;
             }
             String s = new String(resp).trim();
-            if (!HASH.matcher(s).matches()) {
+            // "null" is a version with no commits yet
+            if (!s.equals("null") && !HASH.matcher(s).matches()) {
                 log.debug("Asked {} for a branch hash and got {} bytes of something else", path, s.length());
                 throw new SetupException(remoteAddress + " is not a repository branch: it answered with a page"
                         + " rather than a version. A checkout url looks like"
@@ -1705,13 +1697,7 @@ public class KSync3 {
 
     private void enqueueFileDownload(Path filePath, String hash) {
         //fileDownloadQueue.add(hash);
-        Future<?> f = fileTransferExecutor.submit(() -> {
-            try {
-                combineToLocal(filePath, hash);
-            } catch (InterruptedException ex) {
-                throw new RuntimeException(ex);
-            }
-        });
+        Future<?> f = fileTransferExecutor.submit(() -> combineToLocal(filePath, hash));
         if (f != null) {
             fileDownloadFutures.add(f);
         }
@@ -1749,7 +1735,8 @@ public class KSync3 {
         }
         List<ITriplet> triplets;
         try {
-            triplets = getTriplets(hash, localBlobStore);
+            // Local then server: a blob that fails its hash check is dropped on read
+            triplets = getTriplets(hash, wrappedBlobStore);
         } catch (Exception e) {
             String errMsg = "Could not pull directory for " + dir.getAbsolutePath() + " with hash " + hash + " because " + e.getMessage();
             errors.add(errMsg);
@@ -1771,7 +1758,7 @@ public class KSync3 {
                         if (fileFanout != null) {
                             try (FileOutputStream fout = new FileOutputStream(dest)) {
                                 log.debug("write local file: {}", dest.getAbsolutePath());
-                                c.combine(fileFanout.getHashes(), localHashStore, localBlobStore, fout);
+                                c.combine(fileFanout.getHashes(), localHashStore, wrappedBlobStore, fout);
                             } catch (IOException ex) {
                                 throw new RuntimeException(ex);
                             }
@@ -1836,19 +1823,6 @@ public class KSync3 {
     private String commit() {
         String hash = tripletStore.scan();
         return hash;
-    }
-
-    private class Counter {
-
-        private int count;
-
-        synchronized void up() {
-            count++;
-        }
-
-        synchronized void down() {
-            count--;
-        }
     }
 
 }

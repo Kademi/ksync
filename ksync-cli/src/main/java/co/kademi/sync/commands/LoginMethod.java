@@ -7,7 +7,7 @@ import picocli.CommandLine.Option;
 public class LoginMethod {
 
     @Option(names = {"-o", "--oauth"},
-            description = "Use OAuth2 instead of a username and password. Opens a browser to authorize")
+            description = "Sign in by browser only, with no fallback to a username and password")
     public boolean oauth;
 
     @ArgGroup(exclusive = false)
