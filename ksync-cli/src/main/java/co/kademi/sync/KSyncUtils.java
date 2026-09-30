@@ -141,15 +141,10 @@ public class KSyncUtils {
         String curDir = KSync3Utils.getOrCreateAppDirectory(cmd.global.appdir, cmd.global.appname);
         File dir = new File(curDir);
 
-        if (!dir.exists()) {
-            log.error("Directory does not exist: " + dir.getAbsolutePath());
-        } else {
-            if (!dir.isDirectory()) {
-                log.error("Is not a directory: " + dir.getAbsolutePath());
-            } else {
-                s.accept(dir);
-            }
+        if (!dir.isDirectory()) {
+            throw new SetupException((dir.exists() ? "Not a directory: " : "Directory does not exist: ") + dir.getAbsolutePath());
         }
+        s.accept(dir);
     }
 
     public static void withKSync(KSyncCommand c, ConnectedCommand cmd, boolean backgroundSync) throws Exception {

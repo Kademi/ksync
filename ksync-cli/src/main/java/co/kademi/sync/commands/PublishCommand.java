@@ -5,10 +5,14 @@ import java.util.List;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-@Command(name = "publish", header = "Publish apps, libs or themes to the marketplace.",
-        description = {"Run from the folder that holds the apps, libs and themes directories, and name what to publish with --appids. Each asset must have exactly one version folder inside it.",
+@Command(name = "publish", header = "Publish apps, libs, themes or recipes to the marketplace.",
+        description = {"Run from the folder that holds the apps, libs, themes and recipes directories, and name what to publish with --appids. Each asset must have exactly one version folder inside it.",
             "",
-            "Not needed to use an app or lib within your own account, only to list it on the marketplace."})
+            "Not needed to use an app or lib within your own account, only to list it on the marketplace.",
+            "",
+            "A ksync.toml in the folder sets the order: its tiers are published top to bottom, and each tier's first entries before the rest of it. Without one, the order is themes, apps, libs, recipes.",
+            "",
+            "Exits 1 when anything still failed after its retries."})
 public class PublishCommand extends ConnectedCommand {
 
     /** Nowhere to remember this: which apps to publish is decided per run. */
@@ -23,6 +27,10 @@ public class PublishCommand extends ConnectedCommand {
 
     @Option(names = {"-r", "--report"}, description = "Display report only, do not make changes")
     public boolean report;
+
+    @Option(names = {"--retries"}, defaultValue = "3", paramLabel = "<n>",
+            description = "How many more times to try an app, lib or theme that fails, with --force from the second try. Default ${DEFAULT-VALUE}")
+    public int retries;
 
     @Override
     protected Integer run() throws Exception {

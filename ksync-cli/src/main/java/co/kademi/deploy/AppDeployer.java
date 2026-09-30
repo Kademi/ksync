@@ -3,6 +3,7 @@
  */
 package co.kademi.deploy;
 
+import co.kademi.sync.KSync3;
 import co.kademi.sync.commands.PublishCommand;
 import co.kademi.sync.KSync3Utils;
 import co.kademi.sync.KSyncUtils;
@@ -40,9 +41,8 @@ import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.UnknownHostException;
 import java.nio.charset.Charset;
-import java.nio.file.FileSystems;
-import java.nio.file.WatchService;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -119,11 +119,7 @@ public class AppDeployer {
         log.info("Publishing..");
 
         KSyncUtils.withDir((File dir) -> {
-            if (!dir.exists()) {
-                log.error("Directory not found: {}", dir.getAbsolutePath());
-                return;
-            }
-
+            PublishManifest manifest = PublishManifest.load(dir);
             File configDir = new File(dir, ".ksync");
             configDir.mkdirs();
 
@@ -158,6 +154,8 @@ public class AppDeployer {
                 d = new AppDeployer(dir, url, user, password, cmd.appIds, cookies, oauth);
                 d.force = cmd.force;
                 d.report = cmd.report;
+                d.retries = cmd.retries;
+                d.manifest = manifest;
                 d.ignores = ignores;
 
                 log.debug("---- OPTIONS ----");
@@ -173,6 +171,8 @@ public class AppDeployer {
                 if (!d.results.errors.isEmpty()) {
                     System.exit(1);
                 }
+            } catch (RuntimeException ex) {
+                throw ex;
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -194,6 +194,12 @@ public class AppDeployer {
 
     private boolean report; // if true, dont make any changes
     private boolean force;
+    private int retries;
+    private PublishManifest manifest;
+    private Throwable syncFailure;
+    private int missingRounds;
+    private final Set<String> needsMarketItem = new HashSet<>();
+    private final Set<String> versionsCreated = new HashSet<>();
     private co.kademi.sync.Ignores ignores = co.kademi.sync.Ignores.none();
     private final ScheduledExecutorService scheduledExecutorService;
     private final FileSystemWatchingService fileSystemWatchingService;
@@ -238,18 +244,8 @@ public class AppDeployer {
         localHashStore = new FileSystem2HashStore(new File(localDataDir, "hash"));
 
         scheduledExecutorService = Executors.newScheduledThreadPool(1);
-        final java.nio.file.Path path = FileSystems.getDefault().getPath(rootDir.getAbsolutePath());
-        WatchService watchService = null;
-        try {
-            watchService = path.getFileSystem().newWatchService();
-        } catch (IOException ex) {
-            log.error("Exception initialising watch service");
-        }
-        if (watchService != null) {
-            fileSystemWatchingService = new FileSystemWatchingService(watchService, scheduledExecutorService);
-        } else {
-            fileSystemWatchingService = null;
-        }
+        // Publish scans once and never watches; this only lends the scans an executor
+        fileSystemWatchingService = new FileSystemWatchingService(null, scheduledExecutorService);
         fileHashCache = new BerkeleyDbFileHashCache(envDir);
     }
 
@@ -259,16 +255,24 @@ public class AppDeployer {
             this.client.doOptions(Path.root);
         } catch (NotAuthorizedException nae) {
             log.error("Not authorised to access server. Please check your user name and password");
+            results.errors.add("Not authorised to access " + client.server);
             return;
         } catch (Exception ex) {
             log.error("Exeption connecting to server. Please check connection details", ex);
+            results.errors.add("Could not connect to " + client.server + ": " + ex.getMessage());
             return;
         }
 
-        upSyncMarketplaceDir(new File(rootDir, "themes"), true, false, false);
-        upSyncMarketplaceDir(new File(rootDir, "apps"), false, true, false);
-        upSyncMarketplaceDir(new File(rootDir, "libs"), false, false, false);
-        upSyncMarketplaceDir(new File(rootDir, "recipes"), false, false, true);
+        if (manifest == null) {
+            upSyncMarketplaceDir(new File(rootDir, "themes"), true, false, false, Collections.emptyList());
+            upSyncMarketplaceDir(new File(rootDir, "apps"), false, true, false, Collections.emptyList());
+            upSyncMarketplaceDir(new File(rootDir, "libs"), false, false, false, Collections.emptyList());
+            upSyncMarketplaceDir(new File(rootDir, "recipes"), false, false, true, Collections.emptyList());
+        } else {
+            for (PublishManifest.Tier tier : manifest.tiers) {
+                upSyncMarketplaceDir(new File(rootDir, tier.dir), tier.type.equals("theme"), tier.type.equals("app"), tier.type.equals("recipe"), tier.first);
+            }
+        }
 
         System.out.println("");
         System.out.println("");
@@ -291,36 +295,91 @@ public class AppDeployer {
         System.out.println("");
     }
 
-    private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp, boolean isRecipe) throws IOException {
+    private void upSyncMarketplaceDir(File dir, boolean isTheme, boolean isApp, boolean isRecipe, List<String> first) throws IOException {
         log.debug("upsync {} {} {}", dir, isTheme, isApp);
-        if (dir.listFiles() == null) {
+        File[] children = dir.listFiles(File::isDirectory);
+        if (children == null) {
             log.warn("No child dirs in " + dir.getAbsolutePath());
+            if (manifest != null) {
+                results.warnings.add(PublishManifest.FILE + " lists " + dir.getName() + ", but there is no such folder");
+            }
             return;
         }
-
-        // Note that by providing a watchservice, MemoryLocalTripletStore will not create a watcher.
-        final java.nio.file.Path path = FileSystems.getDefault().getPath(dir.getAbsolutePath());
-        WatchService watchService = path.getFileSystem().newWatchService();
-        FileSystemWatchingService fileWatchService = new FileSystemWatchingService(watchService, scheduledExecutorService);
-
-        for (File appDir : dir.listFiles()) {
-            if (appDir.isDirectory()) {
-                String appName = appDir.getName();
-
-                if (isProcess(appDir)) {
-                    processAppDir(appName, isTheme, isApp, isRecipe, appDir, fileWatchService);
-                }
+        List<String> names = new ArrayList<>();
+        for (File child : children) {
+            names.add(child.getName());
+        }
+        Collections.sort(names);
+        List<String> missing = new ArrayList<>();
+        List<String> ordered = PublishManifest.order(first, names, missing);
+        if (!missing.isEmpty()) {
+            String warning = PublishManifest.FILE + " puts " + missing + " first in " + dir.getName() + ", but there is no such folder";
+            log.warn(warning);
+            results.warnings.add(warning);
+        }
+        for (String appName : ordered) {
+            File appDir = new File(dir, appName);
+            if (isProcess(appDir)) {
+                publishWithRetries(appName, isTheme, isApp, isRecipe, appDir);
             }
         }
+    }
+
+    /** A publish that fails often works on the next try, so an app only counts as failed once its retries are used up. */
+    private void publishWithRetries(String appName, boolean isTheme, boolean isApp, boolean isRecipe, File appDir) {
+        boolean givenForce = force;
+        int tries = report ? 0 : retries;
+        try {
+            for (int attempt = 0;; attempt++) {
+                int before = results.errors.size();
+                syncFailure = null;
+                try {
+                    processAppDir(appName, isTheme, isApp, isRecipe, appDir, fileSystemWatchingService);
+                } catch (RuntimeException ex) {
+                    log.error("Publishing " + appName + " failed", ex);
+                    syncFailure = ex;
+                    results.errors.add(appName + " - " + KSync3.rootCauseMessage(ex));
+                }
+                if (results.errors.size() == before) {
+                    return;
+                }
+                if (isLoginProblem(syncFailure)) {
+                    throw new co.kademi.sync.SetupException("Publishing " + appName + " was refused: " + KSync3.rootCauseMessage(syncFailure)
+                            + ". Check the login for " + client.server + ", eg run: ksync3 login");
+                }
+                if (attempt >= tries) {
+                    return;
+                }
+                List<String> failed = results.errors.subList(before, results.errors.size());
+                for (String e : failed) {
+                    results.warnings.add("Try " + (attempt + 1) + " failed, tried again: " + e);
+                }
+                failed.clear();
+                log.warn("Publishing {} failed, trying again ({} of {})", appName, attempt + 2, tries + 1);
+                pause(5000L * (attempt + 1));
+                // Only a version this run created is overwritten; a failure before the published check must not force one
+                force = givenForce || versionsCreated.contains(appName);
+            }
+        } finally {
+            force = givenForce;
+        }
+    }
+
+    private static boolean isLoginProblem(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof NotAuthorizedException || t instanceof co.kademi.sync.oauth.NotLoggedInException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void processAppDir(String appName, boolean isTheme, boolean isApp, boolean isRecipe, File appDir, FileSystemWatchingService fileWatchService) throws RuntimeException {
         log.debug("checkCreateApp {} {}", appName);
         String appPath = "/manageApps/" + appName;
-        boolean appCreated = false;
         if (!doesExist(appPath)) {
             if (createApp(appName, isTheme, isApp, isRecipe)) {
-                appCreated = true;
+                needsMarketItem.add(appName);
                 log.debug("created app {}", appName);
             } else {
                 results.errors.add(appName + " - couldnt create app");
@@ -367,14 +426,16 @@ public class AppDeployer {
             }
         }
 
+        syncFailure = null;
+        int errorsBefore = results.errors.size();
         String localHash = upSyncMarketplaceVersionDir(appName, versionName, appDir, fileWatchService);
         if (localHash != null) {
 
-            if (appCreated) {
+            if (needsMarketItem.contains(appName)) {
                 if (!addToMarketPlace(appName)) {
-                    results.errors.add(appName + " Did not add app to marketplace " + appPath);
                     return;
                 }
+                needsMarketItem.remove(appName);
             }
 
             String branchPath = "/repositories/" + appName + "/";
@@ -385,7 +446,7 @@ public class AppDeployer {
                 if (makeCurrentVersionLive(branchPath, versionName)) {
                     // Republic, so the live version is the published version
                     if (!publishApp(appName, appProperties.getClusters())) {
-                        results.errors.add(appName + "Pushed, but could not (re)publish app to marketplace " + appPath);
+                        results.errors.add(appName + " - Pushed, but could not (re)publish app to marketplace " + appPath);
                         return;
                     }
 
@@ -396,7 +457,9 @@ public class AppDeployer {
             }
 
         } else {
-            results.errors.add(appName + " Failed to sync local to remote " + appName);
+            if (results.errors.size() == errorsBefore) {
+                results.errors.add(appName + " Failed to sync local to remote " + appName + (syncFailure == null ? "" : ": " + KSync3.rootCauseMessage(syncFailure)));
+            }
         }
 
     }
@@ -465,10 +528,16 @@ public class AppDeployer {
                     } else {
                         log.debug("No file changes detected, but force is on so will push, repo hash {}", localRootDir, newHash);
                     }
+                    int errorsBefore = results.errors.size();
+                    missingRounds = 0;
                     push(appName, newHash, branchPath);
+                    if (results.errors.size() > errorsBefore) {
+                        return null;
+                    }
 
                 } catch (Exception ex) {
                     log.error("Exception in file changed event handler", ex);
+                    syncFailure = ex;
                     return null;
                 }
             }
@@ -476,6 +545,7 @@ public class AppDeployer {
             return newHash;
         } catch (Exception ex) {
             log.error("Exception upsyncing " + appName, ex);
+            syncFailure = ex;
             return null;
         }
     }
@@ -483,7 +553,7 @@ public class AppDeployer {
     private void push(String appName, String localRootHash, String branchPath) {
         String remoteHash = getRemoteHash(branchPath);
         if (remoteHash == null) {
-            log.info("Aborted");
+            results.errors.add(appName + " - could not read the hash of " + branchPath);
             return;
         }
         if (remoteHash.equals(localRootHash)) {
@@ -547,6 +617,7 @@ public class AppDeployer {
             log.debug("Version does not exist app={} version={}", appName, versionName);
             if (createVersion(appBasPath, versionName)) {
                 log.debug("Created version {}", versionName);
+                versionsCreated.add(appName);
             } else {
                 if (report) {
                     results.infos.add(appName + " - Would have created " + versionName + " because that version doesnt exist");
@@ -683,7 +754,8 @@ public class AppDeployer {
                     return true;
                 }
             }
-            log.debug("add to market place failed", res);
+            JSONArray messages = jsonRes.optJSONArray("messages");
+            results.errors.add(appName + " - not added to the marketplace: " + (messages == null || messages.isEmpty() ? res : StringUtils.join(messages, ". ")));
             return false;
 
         } catch (HttpException | NotAuthorizedException | ConflictException | BadRequestException | NotFoundException ex) {
@@ -826,8 +898,18 @@ public class AppDeployer {
         }
     }
 
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted", ex);
+        }
+    }
+
     private void pollForPushComplete(Long jobId, String appName, String localRootHash, String branchPath) {
-        long sleepyTime = 100;
+        long sleepyTime = 500;
+        int throttled = 0;
         PollJobResult pollRes = null;
         try {
             log.debug("PUSH Local: {}", localRootHash);
@@ -835,7 +917,19 @@ public class AppDeployer {
             while (!done) {
                 String url = "/tasks/?jobId=" + jobId + "&asJson";
                 log.debug("poll for push result {} ...", url);
-                byte[] bytes = client.get(url); // response can either be in-progress, or completed. If completed will have missing objects in data
+                byte[] bytes;
+                try {
+                    bytes = client.get(url); // response can either be in-progress, or completed. If completed will have missing objects in data
+                } catch (HttpException ex) {
+                    // The IDP policy limits each url per minute, and every app's poll is the same /tasks/ url
+                    if (ex.getResult() != 429 || ++throttled > 12) {
+                        throw ex;
+                    }
+                    log.debug("Polling job {} was rate limited, waiting", jobId);
+                    pause(Math.min(5000L * throttled, 30000L));
+                    continue;
+                }
+                throttled = 0;
                 String res = new String(bytes);
                 pollRes = parseJson(res);
                 if (pollRes.isCancelled()) {
@@ -843,14 +937,8 @@ public class AppDeployer {
                 } else if (pollRes.isCompleted()) {
                     done = true;
                 } else {
-                    if (sleepyTime < 1500) {
-                        sleepyTime += 10;
-                    }
-                    try {
-                        Thread.sleep(sleepyTime);
-                    } catch (InterruptedException ex) {
-                        throw new RuntimeException("Interrupted", ex);
-                    }
+                    pause(sleepyTime);
+                    sleepyTime = Math.min(sleepyTime * 2, 3000);
                 }
             }
             if (pollRes == null) {
@@ -921,6 +1009,10 @@ public class AppDeployer {
                     }
                 }
                 log.debug("Push failed: But uploaded " + count + "missing objects have been uploaded so will try again :)", res);
+                if (++missingRounds > 5) {
+                    results.errors.add(appName + " - the server still reported missing objects after 5 rounds of uploading them");
+                    return;
+                }
                 push(appName, localRootHash, branchPath);
                 return;
             }
