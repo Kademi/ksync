@@ -163,6 +163,10 @@ public class PackStore implements BlobStore, HashStore, Closeable {
             nextPackId = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getShort(12) & 0xffff;
             return;
         }
+        if (data.length >= MAGIC.length && Arrays.equals(data, 0, MAGIC.length - 1, MAGIC, 0, MAGIC.length - 1)
+                && data[MAGIC.length - 1] != MAGIC[MAGIC.length - 1]) {
+            throw new SetupException(p + " is a newer format than this ksync3 reads. Update ksync3, or delete " + dir + " to fetch everything again");
+        }
         // Only an outside edit damages a renamed-into-place index, and everything here can be rebuilt or refetched
         log.warn("{} is damaged, so the objects in {} are discarded and will be rebuilt or fetched as needed", p, dir);
         try (DirectoryStream<Path> packs = Files.newDirectoryStream(dir, "pack-*.dat")) {
@@ -522,7 +526,12 @@ public class PackStore implements BlobStore, HashStore, Closeable {
 
     private void flushQuietly() {
         try {
-            flush();
+            synchronized (this) {
+                if (closed) {
+                    return; // the lock is gone, so the index is no longer this process's to write
+                }
+                flush();
+            }
         } catch (IOException | RuntimeException ex) {
             log.warn("Could not save the object index in {}, will try again: {}", dir, ex.toString());
         }
@@ -530,6 +539,7 @@ public class PackStore implements BlobStore, HashStore, Closeable {
 
     @Override
     public void close() throws IOException {
+        flusher.shutdownNow();
         synchronized (this) {
             if (closed) {
                 return;
@@ -547,7 +557,6 @@ public class PackStore implements BlobStore, HashStore, Closeable {
                 OPEN.remove(key);
             }
         }
-        flusher.shutdownNow();
         try {
             Runtime.getRuntime().removeShutdownHook(shutdownHook);
         } catch (IllegalStateException ex) {

@@ -100,6 +100,22 @@ public class ObjectStoreDirTest {
         assertTrue("other checkouts may still read it", new File(shared, ObjectStoreDir.BLOBS).isDirectory());
     }
 
+    /** The flusher had written an index before the copy was cut short, so the store no longer looks new. */
+    @Test
+    public void anInterruptedCopyOfTheSharedStoreResumes() throws Exception {
+        String fileHash = looseStore(objectsRoot.resolve(KSync3Utils.makeFileName(REPO)).toFile());
+        Files.write(new File(configDir, "ksync.properties").toPath(), "remoteHash=abc\n".getBytes(StandardCharsets.UTF_8));
+        packs().setFileFanout("0000000000000000000000000000000000000000", java.util.Collections.emptyList(), 0);
+        packs.close();
+        assertTrue(new File(configDir, "migrating-shared").createNewFile());
+        assertFalse(packs().isNew());
+
+        ObjectStoreDir.migrate(packs, configDir, REPO);
+
+        assertHasContent(packs, fileHash);
+        assertFalse("done, so not copied again", new File(configDir, "migrating-shared").exists());
+    }
+
     @Test
     public void aNewCheckoutDoesNotCopyTheSharedStore() throws Exception {
         String fileHash = looseStore(objectsRoot.resolve(KSync3Utils.makeFileName(REPO)).toFile());

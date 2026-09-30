@@ -67,12 +67,23 @@ public class ObjectStoreDir {
             }
             return;
         }
-        if (!packs.isNew() || KSyncUtils.getLastRemoteHash(configDir) == null) {
+        // Left until the copy is on disk, because the flusher writes an index long before a big copy ends
+        File unfinished = new File(configDir, "migrating-shared");
+        if (!packs.isNew() && !unfinished.exists() || KSyncUtils.getLastRemoteHash(configDir) == null) {
             return;
         }
         File shared = new File(sharedRoot().toFile(), KSync3Utils.makeFileName(repoKey));
+        if (!shared.isDirectory()) {
+            return;
+        }
+        try {
+            unfinished.createNewFile();
+        } catch (IOException ex) {
+            log.debug("Could not mark the copy from {} as started: {}", shared, ex.toString());
+        }
         // Never deleted: other checkouts of the repository may still read it
-        if (shared.isDirectory() && copyInto(packs, new File(shared, BLOBS), new File(shared, HASHES))) {
+        if (copyInto(packs, new File(shared, BLOBS), new File(shared, HASHES))) {
+            unfinished.delete();
             log.info("{} is shared by every checkout of this repository, so it has been left there: delete it"
                     + " once they have all run once", shared);
         }

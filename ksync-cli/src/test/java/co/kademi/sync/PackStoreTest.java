@@ -218,6 +218,24 @@ public class PackStoreTest {
     }
 
     @Test
+    public void aNewerIndexFormatIsRefusedNotWiped() throws Exception {
+        byte[] b = utf8("x");
+        store.setBlob(hashOf(b), b);
+        store.close();
+        Path index = dir.toPath().resolve(PackStore.INDEX);
+        byte[] newer = Files.readAllBytes(index);
+        newer[7] = '2';
+        Files.write(index, newer);
+        try {
+            PackStore.open(dir).close();
+            fail("an older ksync3 would delete what a newer one wrote");
+        } catch (SetupException expected) {
+        }
+        assertTrue(Files.exists(pack(0)));
+        store = PackStore.open(new File(Files.createTempDirectory("packs").toFile(), PackStore.DIR));
+    }
+
+    @Test
     public void aDigestOver32BytesIsRefused() {
         String sha512 = String.join("", Collections.nCopies(128, "a"));
         try {
