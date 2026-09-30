@@ -181,6 +181,11 @@ public class KSync3 {
         }
     }
 
+    /** For a one-shot command's exit code: it ended in a problem state, or some files could not be moved. */
+    private boolean failed() {
+        return status.current().getState().isProblem() || !errors.isEmpty();
+    }
+
     private void showErrors() {
         status.errorCount(errors.size());
         if (!errors.isEmpty()) {
@@ -703,11 +708,15 @@ public class KSync3 {
     public static void checkout(CheckoutCommand cmd) throws Exception {
         log.info("Checking out..");
 
+        boolean[] failed = {false};
         KSyncUtils.withKsync((KSync3 kSync3) -> {
             kSync3.checkout(kSync3.repoDir);
             kSync3.showErrors();
+            failed[0] = kSync3.failed();
         }, cmd, false);
-
+        if (failed[0]) {
+            System.exit(1);
+        }
     }
 
     public static void push(PushCommand cmd) throws Exception {
@@ -717,7 +726,7 @@ public class KSync3 {
             log.debug("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
-            failed[0] = k.status.current().getState().isProblem();
+            failed[0] = k.failed();
         }, cmd, false);
         System.exit(failed[0] ? 1 : 0); // threads arent shutting down
     }
@@ -734,16 +743,19 @@ public class KSync3 {
 
     public static void pull(PullCommand cmd) throws Exception {
         log.info("Pulling changes from the server..");
+        boolean[] failed = {false};
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             try {
                 k.pull(configDir);
                 k.showErrors();
+                failed[0] = k.failed();
             } catch (IOException ex) {
-                log.error("ex", ex);
+                log.error("Pull failed", ex);
+                failed[0] = true;
             }
         }, cmd, false);
         log.info("Done");
-        System.exit(0); // threads arent shutting down
+        System.exit(failed[0] ? 1 : 0); // threads arent shutting down
     }
 
     /** Uploads any missing objects this checkout has, then lists the rest, exiting 1 if there are any. */

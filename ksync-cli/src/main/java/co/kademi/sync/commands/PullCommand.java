@@ -4,7 +4,9 @@ import co.kademi.sync.KSync3;
 import picocli.CommandLine.Command;
 
 @Command(name = "pull", header = "Download remote changes into the local working copy.",
-        description = "Applies everything that changed on the branch since the last sync. A file changed on both sides is a conflict, and you are asked about it unless --localwins says to keep yours.")
+        description = {"Applies everything that changed on the branch since the last sync. A file changed on both sides is a conflict, and you are asked about it unless --localwins says to keep yours.",
+            "",
+            "Exits 1 when the pull did not complete: the server could not be reached, or some files could not be brought down."})
 public class PullCommand extends SyncingCommand {
 
     @Override

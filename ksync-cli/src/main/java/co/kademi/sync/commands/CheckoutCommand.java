@@ -6,7 +6,9 @@ import picocli.CommandLine.Command;
 @Command(name = "checkout", header = "Download a remote branch into this directory.",
         description = {"Fetches every file in the branch and writes it here, then records the branch in .ksync so that later commands in this directory need no url.",
             "",
-            "Give a url with no version on the end to follow the repository, which syncs against its latest version rather than pinning to one."})
+            "Give a url with no version on the end to follow the repository, which syncs against its latest version rather than pinning to one.",
+            "",
+            "Exits 1 when the checkout did not complete, including when some files could not be fetched."})
 public class CheckoutCommand extends SyncingCommand {
 
     @Override
