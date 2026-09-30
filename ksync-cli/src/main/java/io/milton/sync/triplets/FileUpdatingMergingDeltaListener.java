@@ -29,6 +29,7 @@ public class FileUpdatingMergingDeltaListener implements DeltaGenerator.DeltaLis
     private Integer rememberSecs;
     private ConflictResolver.ConflictChoice choice;
     private final ConflictResolver conflictResolver;
+    private int unresolved;
 
     public FileUpdatingMergingDeltaListener(File root, HashStore hashStore, BlobStore blobStore, ConflictResolver conflictResolver) {
         this.conflictResolver = conflictResolver;
@@ -135,7 +136,15 @@ public class FileUpdatingMergingDeltaListener implements DeltaGenerator.DeltaLis
             // take the remote file and update local
             // todo: use a diff/merge tool like https://github.com/albfan/jmeld, or https://www.guiffy.com/help/GuiffyHelp/doc/com/guiffy/inside/GuiffyDiff.html
             doUpdated(path, triplet2);
+        } else {
+            unresolved++;
+            log.warn("Conflict left unresolved: {}", localChild.getAbsolutePath());
         }
+    }
+
+    /** Conflicts answered with neither side, which the pull must not record as done. */
+    public int getUnresolved() {
+        return unresolved;
     }
 
 }

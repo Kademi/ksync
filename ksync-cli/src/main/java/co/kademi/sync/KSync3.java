@@ -1367,7 +1367,7 @@ public class KSync3 {
         if (!java.util.Objects.equals("null".equals(remoteHash) ? null : remoteHash, lastRemoteHash)) {
             if (!localWins) {
                 log.info("Remote repository has changed, please pull. Current remote={} last remote={}", remoteHash, lastRemoteHash);
-                status.problem(SyncState.BLOCKED, "The remote has changed. Pull, or use -localwins to overwrite it");
+                status.problem(SyncState.BLOCKED, "The remote has changed. Pull, or use --localwins to overwrite it");
                 return;
             }
             // Still worth a line: this is the point at which remote-only changes are lost, so
@@ -1548,15 +1548,23 @@ public class KSync3 {
             return null;
         }
 
-        DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore,
-                ConflictResolvers.create(conflictMode, localWins)));
+        FileUpdatingMergingDeltaListener merger = new FileUpdatingMergingDeltaListener(localDir, httpHashStore, httpBlobStore,
+                ConflictResolvers.create(conflictMode, localWins));
+        DeltaGenerator dg = new DeltaGenerator(wrappedHashStore, wrappedBlobStore, merger);
         dg.generateDeltas(lastRemoteHash, remoteHash, localHash); // calc changes and apply them to the working directory
 
-        log.info("Finished pull, save hash " + remoteHash);
-        KSyncUtils.saveRemoteHash(configDir, remoteHash);
         String newLocalHash = commit();
         status.hashes(newLocalHash, remoteHash);
         status.errorCount(errors.size());
+        if (merger.getUnresolved() > 0) {
+            // Not saving the hash keeps push blocked, so it cannot overwrite the other side's change
+            String why = merger.getUnresolved() + " conflicts left unresolved. Pull again to answer them, or use --localwins to keep yours";
+            log.warn(why);
+            status.problem(SyncState.BLOCKED, why);
+            return newLocalHash;
+        }
+        log.info("Finished pull, save hash " + remoteHash);
+        KSyncUtils.saveRemoteHash(configDir, remoteHash);
         status.state(SyncState.IDLE, "pulled");
         return newLocalHash;
     }
