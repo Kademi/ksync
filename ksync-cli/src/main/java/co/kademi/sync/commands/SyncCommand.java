@@ -10,6 +10,8 @@ import picocli.CommandLine.Option;
             "",
             "If it cannot get going - the server is unreachable, the url is not a branch, or the first push fails - it says why and exits, rather than sitting there watching a checkout it cannot push.",
             "",
+            "Once running, a push that fails because the server was unreachable or busy is tried again by itself, after 30 seconds and then less often, up to every 10 minutes. After each push, the server is checked in the background for anything the version is missing.",
+            "",
             "Stop it with q and Enter, or ctrl-c, or Quit from the status icon. The q is there because ctrl-c does not always reach the program on Windows.",
             "",
             "Progress is written to .ksync/status.json for an editor or status bar to read, and shown in the OS status bar unless --notray."})

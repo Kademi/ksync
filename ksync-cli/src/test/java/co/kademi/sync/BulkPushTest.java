@@ -108,23 +108,50 @@ public class BulkPushTest {
         assertEquals(2, sentTo(BulkPush.FILES).size());
         assertTrue(sentTo(BulkPush.BLOBS).containsAll(Arrays.asList(root, sub)));
         assertTrue("split into several zips", puts.stream().filter(p -> p[0].equals(BulkPush.BLOBS)).count() >= 4);
-        int lastBlob = -1;
-        int firstChunk = Integer.MAX_VALUE;
-        int lastChunk = -1;
-        int firstFile = Integer.MAX_VALUE;
-        for (int i = 0; i < puts.size(); i++) {
-            Object path = puts.get(i)[0];
-            if (path.equals(BulkPush.BLOBS)) {
-                lastBlob = i;
-            } else if (path.equals(BulkPush.CHUNKS)) {
-                firstChunk = Math.min(firstChunk, i);
-                lastChunk = i;
-            } else {
-                firstFile = Math.min(firstFile, i);
+        assertEquals(Arrays.asList("blobs", "chunks", "files", "listings"), phases(root, sub));
+    }
+
+    /** Each kind of put in the order sent, runs collapsed: a listing only reaches the server after all below it. */
+    @SuppressWarnings("unchecked")
+    private List<String> phases(String... listings) {
+        List<String> seen = new ArrayList<>();
+        for (Object[] p : puts) {
+            Set<String> names = (Set<String>) p[1];
+            String kind = p[0].equals(BulkPush.CHUNKS) ? "chunks" : p[0].equals(BulkPush.FILES) ? "files"
+                    : Arrays.asList(listings).containsAll(names) ? "listings" : "blobs";
+            if (seen.isEmpty() || !seen.get(seen.size() - 1).equals(kind)) {
+                seen.add(kind);
             }
         }
-        assertTrue("blobs before chunk fanouts", lastBlob < firstChunk);
-        assertTrue("chunk fanouts before file fanouts", lastChunk < firstFile);
+        return seen;
+    }
+
+    @Test
+    public void aRenameSendsNothingNew() throws Exception {
+        String one = file("one");
+        String sub = dir(entry("b.txt", file("two"), "f"));
+        String before = dir(entry("a.txt", one, "f"), entry("sub", sub, "d"));
+        String after = dir(entry("renamed.txt", one, "f"), entry("moved", sub, "d"));
+
+        bulk().send(after, before);
+
+        assertTrue(sentTo(BulkPush.FILES).isEmpty());
+        assertEquals(Collections.singleton(after), sentTo(BulkPush.BLOBS));
+    }
+
+    @Test
+    public void whatTheServerLacksGoesBottomUpAndWhatIsNotHereIsCounted() throws Exception {
+        String a = file("one");
+        String root = dir(entry("a.txt", a, "f"));
+        String gone = "ab" + String.join("", Collections.nCopies(38, "0"));
+
+        BulkPush b = bulk();
+        b.sendObjects(Arrays.asList(root), Arrays.asList(a, gone), Collections.emptyList(), Collections.emptyList());
+
+        assertEquals(Collections.singleton(gone), b.getMissing());
+        assertEquals(Collections.singleton(a), sentTo(BulkPush.FILES));
+        assertTrue("the file's own chunks and blobs go with it", sentTo(BulkPush.BLOBS).containsAll(hashes.getChunkFanout(a).getHashes()));
+        assertEquals(Arrays.asList("blobs", "chunks", "files", "listings"), phases(root));
     }
 
     @Test

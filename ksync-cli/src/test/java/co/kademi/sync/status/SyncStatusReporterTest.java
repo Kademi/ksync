@@ -102,6 +102,24 @@ public class SyncStatusReporterTest {
         assertTrue(r.alerts.get(1), r.alerts.get(1).contains("back to normal"));
     }
 
+    /** A sync retrying while offline goes PUSHING, OFFLINE, PUSHING, OFFLINE: one alert, then one when it recovers. */
+    @Test
+    public void retriesOfTheSameProblemAlertOnce() throws Exception {
+        Recorder r = new Recorder();
+        SyncStatusReporter reporter = reporter(r);
+
+        for (int i = 0; i < 3; i++) {
+            reporter.state(SyncState.PUSHING, "retrying");
+            reporter.problem(SyncState.OFFLINE, "Connection refused");
+        }
+        assertEquals(1, r.alerts.size());
+
+        reporter.state(SyncState.PUSHING, "retrying");
+        reporter.state(SyncState.IDLE, "pushed");
+        assertEquals(2, r.alerts.size());
+        assertTrue(r.alerts.get(1), r.alerts.get(1).contains("back to normal"));
+    }
+
     /** The ordinary busy states are the common case and must be silent. */
     @Test
     public void routineWorkIsSilent() throws Exception {

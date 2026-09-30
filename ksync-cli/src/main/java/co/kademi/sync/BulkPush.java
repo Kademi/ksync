@@ -6,6 +6,8 @@ import io.milton.common.Path;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -55,9 +57,11 @@ class BulkPush {
     private long blobBatchBytes;
     private final List<FanoutBean> chunkFanouts = new ArrayList<>();
     private final List<FanoutBean> fileFanouts = new ArrayList<>();
+    private final List<BlobImpl> dirListings = new ArrayList<>();
+    private boolean wholeTree;
     private final Set<String> missing = new LinkedHashSet<>();
     private final List<Future<?>> sending = new ArrayList<>();
-    // ponytail: at most 4 zips sending and 2 waiting, about 60MB held
+    // ponytail: at most 4 zips sending, 2 waiting and 1 filling, with their zipped copies about 100MB held
     private final ThreadPoolExecutor uploads = new ThreadPoolExecutor(4, 4, 5, TimeUnit.SECONDS, new ArrayBlockingQueue<>(2), new ThreadPoolExecutor.CallerRunsPolicy());
 
     int blobsSent;
@@ -71,21 +75,57 @@ class BulkPush {
 
     /** @param lastDirHash the root the server already has everything under, or null to send the whole tree */
     void send(String dirHash, String lastDirHash) throws IOException {
+        wholeTree = true;
         try {
             walk(dirHash, lastDirHash);
-            if (!missing.isEmpty()) {
-                return;
+            if (missing.isEmpty()) {
+                sendAll();
             }
-            sendBlobs();
-            // Blobs, then chunk fanouts, then file fanouts: other clients take a fanout on the server to mean all below it is there
-            finishSending();
-            sendFanouts(CHUNKS, chunkFanouts);
-            finishSending();
-            sendFanouts(FILES, fileFanouts);
-            finishSending();
         } finally {
             uploads.shutdownNow();
         }
+    }
+
+    /** What the server says it lacks, each file with everything below it, sending what this checkout has. */
+    void sendObjects(Collection<String> dirs, Collection<String> files, Collection<String> chunks, Collection<String> blobHashes) throws IOException {
+        try {
+            for (String hash : blobHashes) {
+                addStoredBlob(hash);
+            }
+            for (String hash : chunks) {
+                addChunk(hash);
+            }
+            for (String hash : files) {
+                addFile(hash);
+            }
+            for (String hash : dirs) {
+                byte[] listing = blobs.getBlob(hash);
+                if (listing == null) {
+                    missing.add(hash);
+                } else if (seenBlobs.add(hash)) {
+                    dirListings.add(new BlobImpl(hash, listing));
+                }
+            }
+            sendAll();
+        } finally {
+            uploads.shutdownNow();
+        }
+    }
+
+    // Other clients take an object on the server to mean all below it is there, so each level waits for the one under it
+    private void sendAll() throws IOException {
+        sendBlobs();
+        finishSending();
+        sendFanouts(CHUNKS, chunkFanouts);
+        finishSending();
+        sendFanouts(FILES, fileFanouts);
+        finishSending();
+        Collections.reverse(dirListings); // children before the parents that list them
+        for (BlobImpl listing : dirListings) {
+            addBlob(listing.getHash(), listing.getBytes());
+        }
+        sendBlobs();
+        finishSending();
     }
 
     /** Hashes this checkout should have and does not, so the tree cannot be sent. */
@@ -106,17 +146,22 @@ class BulkPush {
             missing.add(dirHash);
             return;
         }
-        addBlob(dirHash, listing);
+        dirListings.add(new BlobImpl(dirHash, listing));
         Map<String, ITriplet> before = new HashMap<>();
+        Set<String> beforeObjects = new HashSet<>();
         byte[] lastListing = lastDirHash == null ? null : blobs.getBlob(lastDirHash);
         if (lastListing != null) {
             for (ITriplet t : hashCalc.parseTriplets(new ByteArrayInputStream(lastListing))) {
                 before.put(t.getName(), t);
+                beforeObjects.add(t.getType() + t.getHash());
             }
         }
         for (ITriplet t : hashCalc.parseTriplets(new ByteArrayInputStream(listing))) {
             ITriplet was = before.get(t.getName());
             String wasHash = was != null && was.getType().equals(t.getType()) ? was.getHash() : null;
+            if (wasHash == null && beforeObjects.contains(t.getType() + t.getHash())) {
+                continue; // renamed within this directory, so the server has it already
+            }
             if (t.getType().equals("d")) {
                 walk(t.getHash(), wasHash);
             } else if (!t.getHash().equals(wasHash)) {
@@ -135,31 +180,39 @@ class BulkPush {
             return;
         }
         for (String chunkHash : file.getHashes()) {
-            if (!seenChunks.add(chunkHash)) {
-                continue;
-            }
-            Fanout chunk = hashes.getChunkFanout(chunkHash);
-            if (chunk == null) {
-                missing.add(chunkHash);
-                continue;
-            }
-            for (String blobHash : chunk.getHashes()) {
-                if (seenBlobs.add(blobHash)) {
-                    byte[] bytes = blobs.getBlob(blobHash);
-                    if (bytes == null) {
-                        missing.add(blobHash);
-                    } else {
-                        addBlob(blobHash, bytes);
-                    }
-                }
-            }
-            chunkFanouts.add(new FanoutBean(chunkHash, chunk.getHashes(), chunk.getActualContentLength()));
+            addChunk(chunkHash);
         }
         fileFanouts.add(new FanoutBean(fileHash, file.getHashes(), file.getActualContentLength()));
     }
 
+    private void addChunk(String chunkHash) throws IOException {
+        if (!seenChunks.add(chunkHash)) {
+            return;
+        }
+        Fanout chunk = hashes.getChunkFanout(chunkHash);
+        if (chunk == null) {
+            missing.add(chunkHash);
+            return;
+        }
+        for (String blobHash : chunk.getHashes()) {
+            addStoredBlob(blobHash);
+        }
+        chunkFanouts.add(new FanoutBean(chunkHash, chunk.getHashes(), chunk.getActualContentLength()));
+    }
+
+    private void addStoredBlob(String hash) throws IOException {
+        if (seenBlobs.add(hash)) {
+            byte[] bytes = blobs.getBlob(hash);
+            if (bytes == null) {
+                missing.add(hash);
+            } else {
+                addBlob(hash, bytes);
+            }
+        }
+    }
+
     private void addBlob(String hash, byte[] bytes) throws IOException {
-        if (!missing.isEmpty()) {
+        if (wholeTree && !missing.isEmpty()) {
             return; // it will not be sent, so stop holding blobs
         }
         if (blobBatchBytes + bytes.length > maxZipBytes && !blobBatch.isEmpty()) {

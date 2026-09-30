@@ -70,7 +70,7 @@ public class ExpiredSessionEndsSyncTest {
     public void anExpiredSessionEndsTheSync() throws Exception {
         Recorder r = new Recorder();
         SyncStatusReporter status = reporter(r);
-        NotLoggedInException ex = new NotLoggedInException("The session for acme has expired. Run: ksync3 login --oauth");
+        NotLoggedInException ex = new NotLoggedInException("The session for acme has expired. Run: ksync3 login");
 
         assertTrue(KSync3.reportPushFailure(status, ex, true));
         assertEquals(SyncState.FAILED, r.last().getState());
@@ -109,5 +109,16 @@ public class ExpiredSessionEndsSyncTest {
 
         assertTrue(KSync3.reportPushFailure(status, new IOException("push", new ConnectException("Connection refused")), false));
         assertEquals(SyncState.OFFLINE, r.last().getState());
+    }
+
+    /** Retried every 30 seconds, so only what can fix itself: a refusal would repeat until someone edits. */
+    @Test
+    public void onlyAnUnreachableOrBusyServerIsRetried() {
+        assertTrue(KSync3.clearsOnItsOwn(new RuntimeException(new ConnectException("Connection refused"))));
+        assertTrue(KSync3.clearsOnItsOwn(new RuntimeException(new io.milton.httpclient.GenericHttpException(429, "/x"))));
+        assertTrue(KSync3.clearsOnItsOwn(new RuntimeException(new io.milton.httpclient.GenericHttpException(503, "/x"))));
+        assertFalse("a website naming an app the marketplace lacks",
+                KSync3.clearsOnItsOwn(new RuntimeException(new io.milton.httpclient.InternalServerError("/x", 500))));
+        assertFalse(KSync3.clearsOnItsOwn(new RuntimeException(new io.milton.httpclient.GenericHttpException(403, "/x"))));
     }
 }

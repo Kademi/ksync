@@ -52,6 +52,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Paths;
 import java.nio.file.WatchService;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -238,7 +239,7 @@ public class KSync3 {
      * A refused connection arrives wrapped three deep, and the outermost layer only says that a
      * get failed.
      */
-    private static String rootCauseMessage(Throwable ex) {
+    public static String rootCauseMessage(Throwable ex) {
         Throwable t = ex;
         // bounded for the same reason as stateFor: a cause chain can be made to point back at itself
         for (int i = 0; t.getCause() != null && i < 20; i++) {
@@ -711,12 +712,14 @@ public class KSync3 {
 
     public static void push(PushCommand cmd) throws Exception {
         log.info("Pushing local changes..");
+        boolean[] failed = {false};
         KSyncUtils.withKSync((File configDir, KSync3 k) -> {
             log.debug("do push {}", configDir);
             k.push(configDir);
             k.showErrors();
+            failed[0] = k.status.current().getState().isProblem();
         }, cmd, false);
-        System.exit(0); // threads arent shutting down
+        System.exit(failed[0] ? 1 : 0); // threads arent shutting down
     }
 
     public static void sync(SyncCommand cmd) throws Exception {
@@ -763,6 +766,12 @@ public class KSync3 {
         return t;
     });
     private final java.util.concurrent.atomic.AtomicBoolean checkQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean retryQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private static final int PUSH_RETRY_SECS = 30;
+    private static final int MAX_PUSH_RETRY_SECS = 600;
+    private volatile int retryDelaySecs = PUSH_RETRY_SECS;
+    // The check's finding outlives the pushes after it, which would otherwise set the status back to idle
+    private volatile String serverIncomplete;
     private final MemoryLocalTripletStore tripletStore;
     private final HttpBlobStore httpBlobStore;
     private final HttpHashStore httpHashStore;
@@ -962,6 +971,9 @@ public class KSync3 {
      */
     private void pushFailed(Exception ex) {
         if (!reportPushFailure(status, ex, watching)) {
+            if (clearsOnItsOwn(ex)) {
+                retryPushLater();
+            }
             return;
         }
         // Left in a state that says what happened, because this runs on a watch thread with
@@ -969,6 +981,33 @@ public class KSync3 {
         status.stopped();
         status.close();
         System.exit(1);
+    }
+
+    /** The server was unreachable or busy, so the same push may work later; a refusal will not. */
+    static boolean clearsOnItsOwn(Throwable ex) {
+        if (stateFor(ex) == SyncState.OFFLINE) {
+            return true;
+        }
+        HttpException http = find(ex, HttpException.class);
+        return http != null && Arrays.asList(429, 502, 503, 504).contains(http.getResult());
+    }
+
+    /** Pushes again later, backing off, since an unpushed change would otherwise wait for the next save. */
+    private void retryPushLater() {
+        if (retryQueued.compareAndSet(false, true)) {
+            int delay = retryDelaySecs;
+            retryDelaySecs = Math.min(delay * 2, MAX_PUSH_RETRY_SECS);
+            log.info("Trying the push again in {} seconds", delay);
+            scheduledExecutorService.schedule(() -> {
+                retryQueued.set(false);
+                try {
+                    tripletStore.scan(); // its callback pushes, and a failure comes back here
+                } catch (RuntimeException ex) {
+                    log.warn("Could not scan for the push retry: {}", rootCauseMessage(ex));
+                    retryPushLater();
+                }
+            }, delay, TimeUnit.SECONDS);
+        }
     }
 
     /**
@@ -981,7 +1020,11 @@ public class KSync3 {
     static boolean reportPushFailure(SyncStatusReporter status, Exception ex, boolean watching) {
         NotLoggedInException notLoggedIn = NotLoggedInException.find(ex);
         if (notLoggedIn == null) {
-            log.error("Exception in file changed event handler", ex);
+            if (watching && clearsOnItsOwn(ex)) {
+                log.warn("Push failed, it will be tried again: {}", rootCauseMessage(ex));
+            } else {
+                log.error("Exception in file changed event handler", ex);
+            }
             status.problem(stateFor(ex), "Push failed: " + ex.getMessage());
             if (watching) {
                 return false;
@@ -1302,7 +1345,8 @@ public class KSync3 {
             log.info("No change. Local repo is exactly the same as remote hash={}", localRootHash);
             // A push whose reply was lost still committed
             KSyncUtils.saveRemoteHash(configDir, remoteHash);
-            status.state(SyncState.IDLE, "nothing to push");
+            retryDelaySecs = PUSH_RETRY_SECS;
+            idle("nothing to push");
             return;
         }
 
@@ -1335,7 +1379,22 @@ public class KSync3 {
         params.put("validate", "false");
         try {
             log.debug("PUSH Local: {} Remote: {}", localRootHash, remoteHash);
-            String res = client.post(branchPath, params);
+            String res;
+            try {
+                res = client.post(branchPath, params);
+            } catch (RuntimeException ex) {
+                HttpException http = find(ex, HttpException.class);
+                if (http == null || http.getResult() != 500) {
+                    throw ex;
+                }
+                // The server logs why and rolls back, but sends no reason
+                String why = "The server refused the new version and kept the old one. On a website,"
+                        + " check WEB-INF/settings.xml only names apps and versions the marketplace has; the server log says which";
+                log.error(why);
+                log.debug("Refused", ex);
+                status.problem(SyncState.FAILED, why);
+                return;
+            }
             if (!Boolean.TRUE.equals(JSONObject.fromObject(res).get("status"))) {
                 log.warn("The server did not take the new hash: {}", res);
                 status.problem(SyncState.FAILED, "The server did not take the new hash");
@@ -1344,8 +1403,9 @@ public class KSync3 {
             KSyncUtils.saveRemoteHash(configDir, localRootHash);
             status.hashes(localRootHash, localRootHash);
             log.info("Pushed {}", localRootHash);
+            retryDelaySecs = PUSH_RETRY_SECS;
             if (background) {
-                status.state(SyncState.IDLE, "pushed");
+                idle("pushed");
                 checkServerHasEverythingLater();
             } else {
                 status.state(SyncState.PUSHING, "checking the server has everything");
@@ -1360,19 +1420,29 @@ public class KSync3 {
         }
     }
 
-    /** @return false if the push cannot go on, with the reason on the status */
-    private boolean sendChanges(String localRootHash, String lastRemoteHash) throws IOException {
-        BulkPush bulk = new BulkPush(localBlobStore, localHashStore, (path, zip) -> {
+    private BulkPush bulkPush() {
+        return new BulkPush(localBlobStore, localHashStore, (path, zip) -> {
             HttpResult r = client.doPut(path, zip, "application/zip");
             if (r.getStatusCode() < 200 || r.getStatusCode() > 299) {
-                throw new IOException("The server answered " + r.getStatusCode() + " to a bulk upload to " + path);
+                throw new IOException("The server answered " + r.getStatusCode() + " to a bulk upload to " + path,
+                        new io.milton.httpclient.GenericHttpException(r.getStatusCode(), path.toString()));
             }
         });
+    }
+
+    /** @return false if the push cannot go on, with the reason on the status */
+    private boolean sendChanges(String localRootHash, String lastRemoteHash) throws IOException {
+        BulkPush bulk = bulkPush();
         try {
             bulk.send(localRootHash, lastRemoteHash);
         } catch (IOException ex) {
-            log.error("Bulk upload failed", ex);
-            status.problem(SyncState.FAILED, "Could not upload changes: " + ex.getMessage());
+            status.problem(stateFor(ex), "Could not upload changes: " + ex.getMessage());
+            if (background && clearsOnItsOwn(ex)) {
+                log.warn("Bulk upload failed, it will be tried again: {}", rootCauseMessage(ex));
+                retryPushLater();
+            } else {
+                log.error("Bulk upload failed", ex);
+            }
             return false;
         }
         if (!bulk.getMissing().isEmpty()) {
@@ -1448,6 +1518,11 @@ public class KSync3 {
         String lastRemoteHash = KSyncUtils.getLastRemoteHash(configDir);
         String remoteHash = getRemoteHash(branchPath);
         status.hashes(localHash, remoteHash);
+        if ("null".equals(remoteHash)) {
+            log.info("The version is empty, so there is nothing to pull");
+            status.state(SyncState.IDLE, "nothing to pull");
+            return null;
+        }
         if (lastRemoteHash != null && lastRemoteHash.equals(remoteHash)) {
             log.info("No change on server since last pull");
             status.state(SyncState.IDLE, "nothing to pull");
@@ -1516,6 +1591,15 @@ public class KSync3 {
         }
     }
 
+    private void idle(String detail) {
+        String incomplete = serverIncomplete;
+        if (incomplete != null) {
+            status.problem(SyncState.FAILED, incomplete);
+        } else {
+            status.state(SyncState.IDLE, detail);
+        }
+    }
+
     /** @return false if the server is still missing objects, with the reason on the status */
     private boolean completeOnServer() {
         log.info("Checking the server has everything for this version, which walks the whole version..");
@@ -1523,13 +1607,18 @@ public class KSync3 {
             MissingObjects missing = uploadUntilComplete(findMissing());
             if (missing.isEmpty()) {
                 log.info("The server has everything");
+                if (serverIncomplete != null) {
+                    serverIncomplete = null;
+                    status.state(SyncState.IDLE, "the server has everything");
+                }
                 return true;
             }
             for (String reportLine : missing.report()) {
                 log.warn(reportLine);
             }
-            status.problem(SyncState.FAILED, "The server is missing " + missing.getObjects().size()
-                    + " objects for this version, and this checkout does not have them either");
+            serverIncomplete = "The server is missing " + missing.getObjects().size()
+                    + " objects for this version, and this checkout does not have them either";
+            status.problem(SyncState.FAILED, serverIncomplete);
             return false;
         } catch (SetupException ex) {
             log.warn("This server cannot check a version for missing objects: {}", ex.getMessage());
@@ -1552,47 +1641,18 @@ public class KSync3 {
         return missing;
     }
 
-    /** Forced past the bloom filters, which can say the server has what it lacks. @return how many were not here */
-    private int upload(MissingObjects missing) {
-        int notHere = 0;
-        httpBlobStore.setForce(true);
-        httpHashStore.setForce(true);
-        try {
-            for (MissingObjects.MissingObject o : missing.getObjects()) {
-                String h = o.getHash();
-                switch (o.getType()) {
-                    case MissingObjects.TYPE_FILE_FANOUT: {
-                        Fanout f = localHashStore.getFileFanout(h);
-                        if (f == null) {
-                            notHere++;
-                        } else {
-                            httpHashStore.setFileFanout(h, f.getHashes(), f.getActualContentLength());
-                        }
-                        break;
-                    }
-                    case MissingObjects.TYPE_CHUNK_FANOUT: {
-                        Fanout f = localHashStore.getChunkFanout(h);
-                        if (f == null) {
-                            notHere++;
-                        } else {
-                            httpHashStore.setChunkFanout(h, f.getHashes(), f.getActualContentLength());
-                        }
-                        break;
-                    }
-                    default: {
-                        byte[] b = localBlobStore.getBlob(h);
-                        if (b == null) {
-                            notHere++;
-                        } else {
-                            httpBlobStore.setBlob(h, b);
-                        }
-                    }
-                }
-            }
-        } finally {
-            httpBlobStore.setForce(false);
-            httpHashStore.setForce(false);
+    /** Sent bottom up as zips, never asking the bloom filters, which can say the server has what it lacks. @return how many were not here */
+    private int upload(MissingObjects missing) throws IOException {
+        Map<String, List<String>> byType = new HashMap<>();
+        for (MissingObjects.MissingObject o : missing.getObjects()) {
+            byType.computeIfAbsent(o.getType(), k -> new ArrayList<>()).add(o.getHash());
         }
+        BulkPush bulk = bulkPush();
+        bulk.sendObjects(byType.getOrDefault(MissingObjects.TYPE_DIRECTORY, Collections.emptyList()),
+                byType.getOrDefault(MissingObjects.TYPE_FILE_FANOUT, Collections.emptyList()),
+                byType.getOrDefault(MissingObjects.TYPE_CHUNK_FANOUT, Collections.emptyList()),
+                byType.getOrDefault(MissingObjects.TYPE_BLOB, Collections.emptyList()));
+        int notHere = bulk.getMissing().size();
         if (notHere > 0) {
             errors.add(notHere + " objects the server is missing are not in this checkout either");
         }

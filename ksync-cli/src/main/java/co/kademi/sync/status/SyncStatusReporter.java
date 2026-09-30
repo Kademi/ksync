@@ -28,6 +28,7 @@ public class SyncStatusReporter {
     private final boolean notify;
     private SyncStatus current;
     private boolean closed;
+    private SyncState alerted;
 
     /**
      * @param statusFile where to write the JSON, or null for the default inside .ksync
@@ -181,8 +182,13 @@ public class SyncStatusReporter {
             return;
         }
         if (next.isProblem()) {
-            alert("ksync: " + next.getLabel(), current.getDetail() == null ? next.getLabel() : current.getDetail(), true);
-        } else if (previous.isProblem() && next == SyncState.IDLE) {
+            // A retry passes through PUSHING, so without this every failed retry would alert again
+            if (next != alerted) {
+                alerted = next;
+                alert("ksync: " + next.getLabel(), current.getDetail() == null ? next.getLabel() : current.getDetail(), true);
+            }
+        } else if (alerted != null && next == SyncState.IDLE) {
+            alerted = null;
             alert("ksync: back to normal", current.summary(), false);
         }
     }
