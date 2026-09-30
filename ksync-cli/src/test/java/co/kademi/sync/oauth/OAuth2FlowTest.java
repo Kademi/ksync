@@ -284,22 +284,43 @@ public class OAuth2FlowTest {
         assertNull(stored().clientId);
     }
 
-    /** Without RFC 7592 a deleted client shows up only as a browser that never comes back. */
-    @Test
-    public void aTimedOutLoginForgetsTheClientItReused() throws Exception {
-        client().login();
+    private void loginTimesOut() throws Exception {
         OAuth2Client oauth = client();
         oauth.browserLauncher = url -> {
         };
         oauth.browserTimeoutSecs = 1;
-
         try {
             oauth.login();
             fail("nobody answered in the browser");
         } catch (co.kademi.sync.SetupException expected) {
         }
+    }
+
+    /** Without RFC 7592 a deleted client shows up only as a browser that never comes back. */
+    @Test
+    public void aTimedOutLoginWithNoSessionForgetsTheClientItReused() throws Exception {
+        client().login();
+        CredentialStore.Credentials c = stored();
+        c.accessToken = null;
+        c.refreshToken = null;
+        store.put(server.baseUrl(), c);
+
+        loginTimesOut();
 
         assertNull(stored().clientId);
+    }
+
+    /** Someone who runs login again and walks away still has the session they had. */
+    @Test
+    public void aTimedOutLoginKeepsAWorkingSessionAndItsClient() throws Exception {
+        client().login();
+        String clientId = stored().clientId;
+        String refresh = stored().refreshToken;
+
+        loginTimesOut();
+
+        assertEquals(clientId, stored().clientId);
+        assertEquals(refresh, stored().refreshToken);
     }
 
     private static class FakeAuthServer {

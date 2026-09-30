@@ -160,13 +160,13 @@ public class OAuth2Client {
         }
         CredentialStore.Credentials c = creds();
         if (StringUtils.isBlank(c.accessToken) && StringUtils.isBlank(c.refreshToken)) {
-            throw new NotLoggedInException("Not logged in to " + host + ". Run: ksync3 login --oauth"
+            throw new NotLoggedInException("Not logged in to " + host + ". Run: ksync3 login"
                     + ", or set " + TOKEN_ENV_VAR + " to an api key");
         }
         if (System.currentTimeMillis() > c.expiresAt - REFRESH_LEEWAY_MILLIS) {
             if (StringUtils.isBlank(c.refreshToken)) {
                 throw new NotLoggedInException("The token for " + host + " has expired and there is no refresh"
-                        + " token. Run: ksync3 login --oauth");
+                        + " token. Run: ksync3 login");
             }
             log.debug("Access token expired or expiring, refreshing");
             refresh();
@@ -188,8 +188,13 @@ public class OAuth2Client {
         // come up on the same port every time. Claim it now and hold it for the whole flow.
         try (Callback callback = new Callback(portOf(creds().redirectUri))) {
             URI callbackUri = URI.create(callback.redirectUri());
-            boolean reusing = StringUtils.isNotBlank(creds().clientId) && callback.redirectUri().equals(creds().redirectUri)
-                    && stillRegistered();
+            boolean reusing = StringUtils.isNotBlank(creds().clientId) && callback.redirectUri().equals(creds().redirectUri);
+            int registration = reusing ? registrationRequest(HTTPRequest.Method.GET) : -1;
+            if (registration == 401 || registration == 403 || registration == 404) {
+                log.info("The ksync client registered with {} no longer exists, registering again", host);
+                forgetRegistration();
+                reusing = false;
+            }
             if (!reusing) {
                 register(metadata, callbackUri);
             }
@@ -211,8 +216,8 @@ public class OAuth2Client {
             try {
                 response = AuthorizationResponse.parse(callback.await(browserTimeoutSecs));
             } catch (co.kademi.sync.SetupException ex) {
-                if (reusing) {
-                    // A deleted client gets an error page and no redirect (RFC 6749 4.1.2.1), so register afresh next time
+                // A deleted client gets an error page and no redirect (RFC 6749 4.1.2.1); only guessed at when unconfirmed and no session would be lost
+                if (reusing && registration != 200 && StringUtils.isBlank(creds().refreshToken)) {
                     forgetRegistration();
                 }
                 throw ex;
@@ -234,10 +239,7 @@ public class OAuth2Client {
         }
     }
 
-    /**
-     * Discards the stored session, then asks the server to revoke it (RFC 7009) and to delete the
-     * registration (RFC 7592) where it offers them; either failing still leaves this machine signed out.
-     */
+    /** Signs this machine out, then revokes the session (RFC 7009) and deletes the registration (RFC 7592) where the server can. */
     public void logout() throws IOException {
         CredentialStore.Credentials c = creds();
         String refresh = c.refreshToken;
@@ -276,16 +278,6 @@ public class OAuth2Client {
     }
 
     /** @return false only when the server says the stored client is gone; true when it cannot say. */
-    private boolean stillRegistered() {
-        int status = registrationRequest(HTTPRequest.Method.GET);
-        if (status == 401 || status == 403 || status == 404) {
-            log.info("The ksync client registered with {} no longer exists, registering again", host);
-            forgetRegistration();
-            return false;
-        }
-        return true;
-    }
-
     private void deleteRegistration() {
         int status = registrationRequest(HTTPRequest.Method.DELETE);
         if (status == 204 || status == 200 || status == 401 || status == 404) {
@@ -297,6 +289,10 @@ public class OAuth2Client {
     private int registrationRequest(HTTPRequest.Method method) {
         CredentialStore.Credentials c = creds();
         if (StringUtils.isBlank(c.registrationClientUri) || StringUtils.isBlank(c.registrationAccessToken)) {
+            return -1;
+        }
+        // Left behind by a client that registered since, eg ksync-go, which keeps keys it does not know
+        if (StringUtils.isBlank(c.clientId) || !c.registrationClientUri.endsWith("/" + c.clientId)) {
             return -1;
         }
         try {
@@ -410,13 +406,13 @@ public class OAuth2Client {
                 forgetRegistration();
             }
             throw new NotLoggedInException("The session for " + host + " has expired and could not be renewed ("
-                    + ex.getMessage() + "). Run: ksync3 login --oauth", ex);
+                    + ex.getMessage() + "). Run: ksync3 login", ex);
         } catch (IOException ex) {
             // Could not reach the server. The credentials may well be fine, so keep them and say
             // so, rather than sending the user off to log in again for a network blip.
             throw new RuntimeException("Could not reach " + host + " to renew the access token, so this"
                     + " may be temporary. The stored login has been kept; try again, and if it persists"
-                    + " run: ksync3 login --oauth", ex);
+                    + " run: ksync3 login", ex);
         }
     }
 
@@ -438,6 +434,9 @@ public class OAuth2Client {
     }
 
     private void exchange(URI tokenEndpoint, AuthorizationGrant grant) throws IOException {
+        if (StringUtils.isBlank(creds().clientId)) {
+            throw new NotLoggedInException("The login for " + host + " has no client registration. Run: ksync3 login");
+        }
         // public client, so the client id goes in the form rather than an auth header
         TokenRequest request = new TokenRequest(tokenEndpoint, new ClientID(creds().clientId), grant, SCOPE);
         TokenResponse response;
