@@ -1101,8 +1101,8 @@ public class AppDeployer {
         private final BlockingQueue<BlobImpl> blobs = new ArrayBlockingQueue<>(1000);
         private final Counter transferQueueCounter = new Counter();
 
-        private boolean running = true;
-        private Exception transferException;
+        private volatile boolean running = true;
+        private volatile Exception transferException;
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
         private final ExecutorService transferExecutor = new ThreadPoolExecutor(5, 5, 60, TimeUnit.SECONDS, transferJobs, rejectedExecutionHandler);
@@ -1118,10 +1118,17 @@ public class AppDeployer {
                 try {
                     while (!blobs.isEmpty() || running) {
                         Set<BlobImpl> toUpload = new HashSet<>();
-                        this.blobs.drainTo(toUpload, 100);
-                        if (!toUpload.isEmpty()) {
-                            doBulkUpload(toUpload);
-                        } else {
+                        // Counted before draining, so checkComplete never sees an empty queue and no transfer while a batch is in hand
+                        transferQueueCounter.up("drain");
+                        try {
+                            this.blobs.drainTo(toUpload, 100);
+                            if (!toUpload.isEmpty()) {
+                                doBulkUpload(toUpload);
+                            }
+                        } finally {
+                            transferQueueCounter.down("drain");
+                        }
+                        if (toUpload.isEmpty()) {
                             Thread.sleep(300);
                         }
                     }
@@ -1179,7 +1186,8 @@ public class AppDeployer {
 
         @Override
         public boolean hasBlob(String hash) {
-            return remote.hasBlob(hash);
+            // The remote answer is a bloom filter guess; a blob it skips must still be local to answer the server's missing-objects list
+            return local.hasBlob(hash) && remote.hasBlob(hash);
         }
 
         @Override
@@ -1189,7 +1197,7 @@ public class AppDeployer {
             }
 
             log.debug("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
-            while (transferQueueCounter.count() > 0 || !this.blobs.isEmpty()) {
+            while (!this.blobs.isEmpty() || transferQueueCounter.count() > 0) {
                 if (transferException != null) {
                     throw new RuntimeException("Exception occured uploading blobs", transferException);
                 }
@@ -1259,8 +1267,8 @@ public class AppDeployer {
         private final Set<String> addedChunkFanouts = new HashSet<>();
         private final Set<String> addedFileFanouts = new HashSet<>();
 
-        private boolean running = true;
-        private Exception transferException;
+        private volatile boolean running = true;
+        private volatile Exception transferException;
 
         private final LinkedBlockingQueue<Runnable> transferJobs = new LinkedBlockingQueue<>(100);
         private final ThreadPoolExecutor.CallerRunsPolicy rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
@@ -1279,18 +1287,24 @@ public class AppDeployer {
                         log.debug("HashStore queue: chunks={} files={}", chunkBeans.size(), fileBeans.size());
                         boolean didNothing = true;
 
-                        Set<FanoutBean> toUpload = new HashSet<>();
-                        this.chunkBeans.drainTo(toUpload, 100);
-                        if (!toUpload.isEmpty()) {
-                            doBulkFanoutUpload(toUpload, true);
-                            didNothing = false;
-                        }
+                        // Counted before draining, so checkComplete never sees empty queues and no transfer while a batch is in hand
+                        transferQueueCounter.up("drain");
+                        try {
+                            Set<FanoutBean> toUpload = new HashSet<>();
+                            this.chunkBeans.drainTo(toUpload, 100);
+                            if (!toUpload.isEmpty()) {
+                                doBulkFanoutUpload(toUpload, true);
+                                didNothing = false;
+                            }
 
-                        toUpload = new HashSet<>();
-                        this.fileBeans.drainTo(toUpload, 100);
-                        if (!toUpload.isEmpty()) {
-                            doBulkFanoutUpload(toUpload, false);
-                            didNothing = false;
+                            toUpload = new HashSet<>();
+                            this.fileBeans.drainTo(toUpload, 100);
+                            if (!toUpload.isEmpty()) {
+                                doBulkFanoutUpload(toUpload, false);
+                                didNothing = false;
+                            }
+                        } finally {
+                            transferQueueCounter.down("drain");
                         }
 
                         if (didNothing) {
@@ -1425,7 +1439,7 @@ public class AppDeployer {
                 throw new RuntimeException("Fanouts transfer exception", transferException);
             }
             log.debug("checkComplete transferJobs={} counter={}", transferJobs.size(), transferQueueCounter.count());
-            while (transferQueueCounter.count() > 0 || !chunkBeans.isEmpty() || !fileBeans.isEmpty()) {
+            while (!chunkBeans.isEmpty() || !fileBeans.isEmpty() || transferQueueCounter.count() > 0) {
                 if (transferException != null) {
                     throw new RuntimeException("Fanouts transfer exception", transferException);
                 }
@@ -1448,7 +1462,7 @@ public class AppDeployer {
             list.remove(url);
         }
 
-        public int count() {
+        synchronized int count() {
             return list.size();
         }
     }
